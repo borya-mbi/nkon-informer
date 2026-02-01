@@ -409,28 +409,37 @@ class NkonMonitor:
     def _extract_grade(self, text: str) -> str:
         """
         Витягування грейду (Grade A/B) з назви
+        Підтримує англійську (Grade) та українську (Клас) версії
         """
-        # Grade A, Grade A-, Grade B, B-Grade
-        match = re.search(r'(?i)(?:Grade\s*[A-B][-+]?|[A-B]-Grade)', text)
+        # Grade A, Grade A-, Клас A, Група A, B-Grade тощо
+        match = re.search(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-B][-+]?|[A-B]-Grade)', text)
         if match:
             grade = match.group(0)
             # Нормалізація: B-Grade -> Grade B
             if grade[1] == '-': 
                 return f"Grade {grade[0]}"
-            return grade.title() # Grade a -> Grade A
+            # Клас A -> Grade A, Група A -> Grade A
+            grade = re.sub(r'(?i)(Клас|Група)', 'Grade', grade)
+            grade = grade.title()  # grade a -> Grade A
+            # Покращене відображення мінуса: A- -> A➖
+            grade = grade.replace('-', '➖')
+            return grade
         return "?"
 
     def _shorten_name(self, text: str) -> str:
         """
         Скорочення назви товару для компактності
+        Підтримує англійську та українську версії
         """
         # 1. Видаляємо грейд (бо ми його показуємо окремо)
-        text = re.sub(r'(?i)(?:Grade\s*[A-B][-+]?|[A-B]-Grade)', '', text)
+        # Підтримка Grade/Клас/Група
+        text = re.sub(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-B][-+]?|[A-B]-Grade)', '', text)
         
         # 2. Видаляємо технічні характеристики (бо вони зрозумілі з контексту)
         remove_words = [
             r'LiFePO4', r'3\.2V', r'Prismatic', r'Rechargeable', 
-            r'Battery', r'Cell', r'\d+\s*Ah' # Ємність вже є на початку
+            r'Battery', r'Cell', r'\d+\s*Ah',  # Ємність вже є на початку
+            r'Призматичний'  # Українська "Prismatic"
         ]
         
         for word in remove_words:
@@ -477,7 +486,7 @@ class NkonMonitor:
                 
             link_text = f"[{item['capacity']}Ah]({item['link']})"
             
-            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} - {price}{status_ico}"
+            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} | {price}{status_ico}"
 
         # Нові товари
         if changes.get('new'):
@@ -515,7 +524,7 @@ class NkonMonitor:
                 grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
                 short_name = self._shorten_name(item['name'])
                 
-                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} - {change_str}\n"
+                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} | {change_str}\n"
             msg += "\n"
         
         # Зміни статусу
@@ -535,7 +544,7 @@ class NkonMonitor:
                 grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️"
                 short_name = self._shorten_name(item['name'])
                 
-                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_ico} {short_name} | {old_str} → {new_str} - {price}\n"
+                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_ico} {short_name} | {old_str} → {new_str} | {price}\n"
             msg += "\n"
         
         # Видалені товари
