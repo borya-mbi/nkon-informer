@@ -121,13 +121,16 @@ git push -u origin main
 
 **Замість:**
 ```bash
-git clone <YOUR_REPO_URL> nkon-informer
+git clone https://github.com/borya-mbi/nkon-informer.git nkon-informer
 ```
 
 **Напишіть:**
 ```bash
 git clone https://github.com/borya-mbi/nkon-informer.git nkon-informer
 ```
+
+> [!NOTE]
+> URL вже правильний! Цей розділ для довідки.
 
 ---
 

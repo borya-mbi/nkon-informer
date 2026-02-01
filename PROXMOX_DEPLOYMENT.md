@@ -248,7 +248,7 @@ google-chrome --version
 **Варіант А: Якщо у вас є Git репозиторій**
 ```bash
 cd /root
-git clone <YOUR_REPO_URL> nkon-informer
+git clone https://github.com/borya-mbi/nkon-informer.git nkon-informer
 cd nkon-informer
 ```
 
@@ -284,26 +284,29 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Крок 6: Конфігурація
+### Крок 6: Налаштування проекту
+
+Ми будемо використовувати файл `.env` для налаштувань.
 
 ```bash
-# Створення config.json
-cp config.example.json config.json
-nano config.json
+# Скопіюйте приклад налаштувань
+cp .env.example .env
 
-# Вставте ваші Telegram credentials
+# Відредагуйте файл
+nano .env
 ```
 
-```json
-{
-  "telegram_bot_token": "YOUR_BOT_TOKEN",
-  "telegram_chat_ids": ["YOUR_CHAT_ID"],
-  "min_capacity_ah": 200,
-  "url": "https://www.nkon.nl/rechargeable/lifepo4/prismatisch.html?___store=en"
-}
+Вставте ваші дані (використовуйте стрілки для навігації):
+
+```ini
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_CHAT_IDS=123456789,987654321
+MIN_CAPACITY_AH=200
+PRICE_ALERT_THRESHOLD=5
 ```
 
-Збережіть: `Ctrl+O`, `Enter`, `Ctrl+X`
+> [!TIP]
+> Щоб зберегти файл в nano: натисніть `Ctrl+O`, `Enter`, потім `Ctrl+X`.
 
 ### Крок 7: Тестування
 
