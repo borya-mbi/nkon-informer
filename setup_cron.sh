@@ -53,12 +53,18 @@ echo ""
 
 # Перевірка конфігурації
 CONFIG_FILE="$SCRIPT_DIR/config.json"
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ Файл конфігурації не знайдено: $CONFIG_FILE"
-    echo "   Скопіюйте config.example.json → config.json і заповніть дані"
+ENV_FILE="$SCRIPT_DIR/.env"
+
+if [ -f "$ENV_FILE" ]; then
+    echo "✅ Конфігурація знайдена: $ENV_FILE"
+elif [ -f "$CONFIG_FILE" ]; then
+    echo "✅ Конфігурація знайдена: $CONFIG_FILE"
+else
+    echo "❌ Конфігурація не знайдена!"
+    echo "   Запустіть ./setup_env.sh для автоматичного налаштування"
+    echo "   Або скопіюйте config.example.json → config.json"
     exit 1
 fi
-echo "✅ Конфігурація знайдена: $CONFIG_FILE"
 echo ""
 
 # Перевірка залежностей
