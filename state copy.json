@@ -1,0 +1,65 @@
+{
+  "https://www.nkon.nl/en/rept-battero-72174l4-324ah-prismatic-324ah-lifepo4-3-2v-grade-a.html": {
+    "name": "REPT Battero 72174L4-324Ah Prismatic 324Ah - LiFePO4 - 3.2V Grade A",
+    "capacity": 324,
+    "price": "€55.00",
+    "price_value": 55.00,
+    "link": "https://www.nkon.nl/en/rept-battero-72174l4-324ah-prismatic-324ah-lifepo4-3-2v-grade-a.html",
+    "stock_status": "preorder",
+    "timestamp": "2026-02-01T05:13:15.191553"
+  },
+  "https://www.nkon.nl/en/calb-l173f280a-280ah-lifepo4-3-2v-grade-a.html": {
+    "name": "CALB L173F280A - 280Ah - LiFePO4 - 3.2V - Grade A",
+    "capacity": 280,
+    "price": "€60.00",
+    "price_value": 60.00,
+    "link": "https://www.nkon.nl/en/calb-l173f280a-280ah-lifepo4-3-2v-grade-a.html",
+    "stock_status": "preorder",
+    "timestamp": "2026-02-01T05:13:15.191553"
+  },
+  "https://www.nkon.nl/en/eve-lf334-334ah-lifepo4-3-2v-single-stud-grade-a.html": {
+    "name": "Eve LF334 - 334Ah - LiFePO4 3.2V - Single stud - Grade A-",
+    "capacity": 334,
+    "price": "€73.95",
+    "price_value": 73.95,
+    "link": "https://www.nkon.nl/en/eve-lf334-334ah-lifepo4-3-2v-single-stud-grade-a.html",
+    "stock_status": "in_stock",
+    "timestamp": "2026-02-01T05:13:15.191553"
+  },
+  "https://www.nkon.nl/en/eve-mb56-prismatic-628ah-lifepo4-3-2v-grade-a-single-stud-2.html": {
+    "name": "Eve MB56 Prismatic - 628Ah - LiFePO4 3.2V - Single stud - Grade A",
+    "capacity": 628,
+    "price": "€149.95",
+    "price_value": 149.95,
+    "link": "https://www.nkon.nl/en/eve-mb56-prismatic-628ah-lifepo4-3-2v-grade-a-single-stud-2.html",
+    "stock_status": "preorder",
+    "timestamp": "2026-02-01T05:13:15.192540"
+  },
+  "https://www.nkon.nl/en/eve-mb31-prismatic-314ah-lifepo4-3-2v-single-stud-grade-a.html": {
+    "name": "Eve MB31 Prismatic - 314Ah - LiFePO4 3.2V - Grade A Single stud",
+    "capacity": 314,
+    "price": "€73.95",
+    "price_value": 73.95,
+    "link": "https://www.nkon.nl/en/eve-mb31-prismatic-314ah-lifepo4-3-2v-single-stud-grade-a.html",
+    "stock_status": "preorder",
+    "timestamp": "2026-02-01T05:13:15.192540"
+  },
+  "https://www.nkon.nl/en/eve-mb31-prismatic-314ah-lifepo4-3-2v-a-grade.html": {
+    "name": "Eve MB31 - 314Ah - LiFePO4 3.2V - Grade A",
+    "capacity": 314,
+    "price": "€87.95",
+    "price_value": 87.95,
+    "link": "https://www.nkon.nl/en/eve-mb31-prismatic-314ah-lifepo4-3-2v-a-grade.html",
+    "stock_status": "preorder",
+    "timestamp": "2026-02-01T05:13:15.192540"
+  },
+  "https://www.nkon.nl/en/fake-deleted-item-200ah.html": {
+    "name": "FAKE Deleted Item - 200Ah - Grade B",
+    "capacity": 200,
+    "price": "€10.00",
+    "price_value": 10.00,
+    "link": "https://www.nkon.nl/en/fake-deleted-item-200ah.html",
+    "stock_status": "in_stock",
+    "timestamp": "2026-02-01T05:13:15.192540"
+  }
+}

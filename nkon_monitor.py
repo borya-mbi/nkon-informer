@@ -276,8 +276,26 @@ class NkonMonitor:
         if link and not link.startswith('http'):
             link = 'https://www.nkon.nl' + link
         
-        price_elem = item.find('span', class_='price')
-        price_raw = price_elem.get_text(strip=True) if price_elem else 'N/A'
+        # Ціна (Спроба знайти ціну без ПДВ - Excl. Tax)
+        # Magento 2: span.price-excluding-tax > span.price
+        price_ex_tax = item.find('span', class_='price-excluding-tax')
+        price_elem = None
+        
+        if price_ex_tax:
+            price_elem = price_ex_tax.find('span', class_='price')
+            
+        # Fallback 1: Якщо не знайдено ex-tax, шукаємо звичайну ціну
+        if not price_elem:
+            price_elem = item.find('span', class_='price')
+            
+        # Fallback 2: Якщо все одно не знайдено, спробуємо знайти будь-який текст з валютою
+        price_raw = 'N/A'
+        if price_elem:
+            price_raw = price_elem.get_text(strip=True)
+        else:
+            # Спроба знайти хоч щось схоже на ціну
+            logger.warning(f"Ціну не знайдено для {name}, шукаємо альтернативи...")
+            
         price_float = self.clean_price(price_raw)
         
         # Статус наявності
@@ -496,8 +514,9 @@ class NkonMonitor:
                 
                 grade = self._extract_grade(item['name'])
                 grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
+                short_name = self._shorten_name(item['name'])
                 
-                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} - {change_str}\n"
+                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} - {change_str}\n"
             msg += "\n"
         
         # Зміни статусу
@@ -516,7 +535,7 @@ class NkonMonitor:
                 grade_raw = self._extract_grade(item['name'])
                 grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️"
                 
-                msg += f"• {status_emoji} [{item['capacity']}Ah] {grade_ico} {old_str}→{new_str} - {price}\n"
+                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_ico} {short_name} | {old_str} → {new_str} - {price}\n"
             msg += "\n"
         
         # Видалені товари
