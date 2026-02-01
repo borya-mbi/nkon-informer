@@ -199,24 +199,23 @@ python nkon_monitor.py
 Кожен запуск відправляє повний звіт:
 
 ```
-🔋 NKON LiFePO4 Monitor Report
-📅 01.02.2026 01:15
+🔋 NKON LiFePO4 Monitor
 
-📊 Статистика:
-✅ In Stock: 3
-🔵 Pre-order: 12
-🆕 Нових: 2
-❌ Видалено: 1
+✨ Нові товари (1):
+• [345Ah](...) 🅰️ Grade A- | REPT CB84 - €79.95 📦Pre
 
-🔄 Зміни:
-🆕 REPT Battero 324Ah - €65.95 (🔵)
-🆕 EVE LF280K 280Ah - €89.95 (✅)
-❌ CALB L194F130A 130Ah - зникла
-💰 Highstar 314Ah €69.95 → €65.95
+💰 Зміни цін (2):
+• [324Ah](...) 🅰️ REPT Battero 72174L4 - €55.00 → €65.95 (🔴+19.9%)
+• [280Ah](...) 🅰️ CALB L173F280A - €60.00 → €52.95 (🟢-11.7%)
 
-📋 Повний список (15 товарів):
-✅ [280Ah](link) EVE LF280K - €89.95
-🔵 [324Ah](link) REPT Battero 72174L4 - €65.95
+📦 Зміни статусу (1):
+• 📦 [334Ah](...) 🅰️ Eve LF334 | In → Pre - €73.95
+
+❌ Видалені (1):
+• [200Ah] FAKE Deleted Item
+
+📋 Без змін (3):
+• ✅ [314Ah](...) 🅰️ Grade A | Eve MB31 - €87.95
 ...
 ```
 
