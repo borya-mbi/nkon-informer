@@ -55,10 +55,6 @@ class NkonMonitor:
         Args:
             config_path: Шлях до файлу конфігурації
         """
-        # Спроба завантажити з .env
-        from dotenv import load_dotenv
-        load_dotenv()
-        
         self.config = self._load_config_with_env(config_path)
         self.state_file = 'state.json'
         self.previous_state = self._load_state()
@@ -69,11 +65,18 @@ class NkonMonitor:
         config = {}
         
         # Спроба завантажити з .env
+        from dotenv import load_dotenv
+        env_loaded = load_dotenv()
+        
         bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         chat_ids_str = os.getenv('TELEGRAM_CHAT_IDS')
         
         if bot_token:
-            logger.info("Використовується .env файл для конфігурації")
+            if env_loaded:
+                logger.info("Використовується .env файл для конфігурації")
+            else:
+                logger.info("Використовуються змінні середовища для конфігурації")
+                
             config['telegram_bot_token'] = bot_token
             # Парсинг чатів з рядка "id1,id2"
             if chat_ids_str:
@@ -85,21 +88,24 @@ class NkonMonitor:
             return config
         
         # Fallback до config.json
-        return self._load_config(config_path)
-        
-    def _load_config(self, config_path: str) -> Dict:
-        """Завантаження конфігурації"""
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            logger.info(f"Конфігурацію завантажено з {config_path}")
-            return config
-        except FileNotFoundError:
-            logger.error(f"Файл конфігурації {config_path} не знайдено!")
-            sys.exit(1)
-        except json.JSONDecodeError as e:
-            logger.error(f"Помилка парсингу JSON: {e}")
-            sys.exit(1)
+        if missing_env:
+            logger.warning(f"⚠️  Змінні середовища не знайдено: {', '.join(missing_env)}")
+            logger.info("Спроба завантажити config.json...")
+            
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    file_config = json.load(f)
+                    config.update(file_config)
+                    logger.info("✅ Конфігурацію завантажено з config.json")
+            except FileNotFoundError:
+                logger.error("❌ ПОМИЛКА: Не знайдено налаштувань!")
+                logger.error("1. Або встановіть змінні середовища (TELEGRAM_BOT_TOKEN, etc)")
+                logger.error("2. Або створіть config.json / .env файл")
+                sys.exit(1)
+            except json.JSONDecodeError as e:
+                logger.error(f"Помилка парсингу JSON: {e}")
+                sys.exit(1)
+        return config
             
     def _load_state(self) -> Dict:
         """Завантаження попереднього стану (для відстеження змін)"""

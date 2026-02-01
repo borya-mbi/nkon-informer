@@ -118,24 +118,32 @@ python nkon_monitor.py
 
 ### ⚙️ Налаштування
 
-### Варіант 1: Через .env файл (Рекомендовано)
+#### Спосіб 1: Змінні середовища (Найбезпечніший - Рекомендовано) ✅
+Налаштуйте змінні безпосередньо в системі. Файл з паролями створювати не потрібно.
 
-Створіть файл `.env` на основі прикладу:
-```bash
-cp .env.example .env
+**Windows (PowerShell):**
+Запустіть наш помічник:
+```powershell
+./setup_env.ps1
 ```
-
-Відредагуйте `.env`:
-```ini
-TELEGRAM_BOT_TOKEN=ваш_токен
-TELEGRAM_CHAT_IDS=chat_id1,chat_id2
-MIN_CAPACITY_AH=200
-PRICE_ALERT_THRESHOLD=5  # % зміни ціни для сповіщення
+Або вручну:
+```powershell
+[System.Environment]::SetEnvironmentVariable('TELEGRAM_BOT_TOKEN', 'ваш_токен', 'User')
+# ... інші змінні
 ```
+*Після налаштування перезапустіть термінал/VS Code.*
 
-### Варіант 2: Через config.json (Застарілий)
+#### Спосіб 2: .env файл (Для локальної розробки)
+Якщо зручніше через файл:
+1. `cp .env.example .env`
+2. Впишіть дані в `.env`
+3. **Не публікуйте цей файл!**
 
-Скрипт підтримує `config.json` для зворотної сумісності.
+### Змінні:
+- `TELEGRAM_BOT_TOKEN`: Токен бота
+- `TELEGRAM_CHAT_IDS`: ID чатів (через кому)
+- `MIN_CAPACITY_AH`: Мін. ємність (default: 200)
+- `PRICE_ALERT_THRESHOLD`: Поріг зміни ціни % (default: 5)
 ```json
 {
   "telegram_bot_token": "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
