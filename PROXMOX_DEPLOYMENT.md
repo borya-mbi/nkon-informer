@@ -139,11 +139,22 @@ echo "Підключитися: pct enter $CTID"
 
 **Використання скрипта:**
 
-1. **Збережіть скрипт на Proxmox хості:**
+1. **Завантажте скрипт на Proxmox хост:** (Рекомендовано - швидко!)
    ```bash
-   # SSH до Proxmox
-   nano /root/create_nkon_lxc.sh
-   # Вставте скрипт вище
+   # Завантаження напряму з GitHub
+   wget https://raw.githubusercontent.com/borya-mbi/nkon-informer/main/create_lxc.sh
+   
+   # Зробіть його виконуваним
+   chmod +x create_lxc.sh
+   
+   # Відкрийте для редагування
+   nano create_lxc.sh
+   ```
+
+2. **Або створіть вручну (copy-paste):**
+   ```bash
+   nano create_lxc.sh
+   # Вставте код скрипта
    # Ctrl+O, Enter, Ctrl+X
    ```
 
@@ -155,14 +166,14 @@ echo "Підключитися: pct enter $CTID"
    # - TEMPLATE (якщо використовуєте інший)
    ```
 
-3. **Зробіть скрипт виконуваним:**
+3. **Зробіть скрипт виконуваним (якщо ще не зробили):**
    ```bash
-   chmod +x /root/create_nkon_lxc.sh
+   chmod +x create_lxc.sh
    ```
 
 4. **Запустіть:**
    ```bash
-   /root/create_nkon_lxc.sh
+   ./create_lxc.sh
    ```
 
 **Перевірка створення:**
@@ -286,27 +297,25 @@ pip install -r requirements.txt
 
 ### Крок 6: Налаштування проекту
 
-Ми будемо використовувати файл `.env` для налаштувань.
-
+**Варіант А: Автоматичне налаштування (Рекомендовано)**
 ```bash
-# Скопіюйте приклад налаштувань
+# Зробіть скрипт виконуваним
+chmod +x setup_env.sh
+
+# Запустіть інтерактивне налаштування
+./setup_env.sh
+```
+Скрипт запитає всі необхідні дані та автоматично створить безпечний файл `.env`.
+
+**Варіант Б: Ручне налаштування**
+```bash
+# Скопіюйте приклад
 cp .env.example .env
 
 # Відредагуйте файл
 nano .env
 ```
-
-Вставте ваші дані (використовуйте стрілки для навігації):
-
-```ini
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHAT_IDS=123456789,987654321
-MIN_CAPACITY_AH=200
-PRICE_ALERT_THRESHOLD=5
-```
-
-> [!TIP]
-> Щоб зберегти файл в nano: натисніть `Ctrl+O`, `Enter`, потім `Ctrl+X`.
+Вставте ваші дані та збережіть (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
 ### Крок 7: Тестування
 

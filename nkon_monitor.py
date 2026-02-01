@@ -391,6 +391,48 @@ class NkonMonitor:
             'current': current_products  # Додаємо поточні товари для відображення "без змін"
         }
     
+    def _extract_grade(self, text: str) -> str:
+        """
+        Витягування грейду (Grade A/B) з назви
+        """
+        # Grade A, Grade A-, Grade B, B-Grade
+        match = re.search(r'(?i)(?:Grade\s*[A-B][-+]?|[A-B]-Grade)', text)
+        if match:
+            grade = match.group(0)
+            # Нормалізація: B-Grade -> Grade B
+            if grade[1] == '-': 
+                return f"Grade {grade[0]}"
+            return grade.title() # Grade a -> Grade A
+        return "?"
+
+    def _shorten_name(self, text: str) -> str:
+        """
+        Скорочення назви товару для компактності
+        """
+        # 1. Видаляємо грейд (бо ми його показуємо окремо)
+        text = re.sub(r'(?i)(?:Grade\s*[A-B][-+]?|[A-B]-Grade)', '', text)
+        
+        # 2. Видаляємо технічні характеристики (бо вони зрозумілі з контексту)
+        remove_words = [
+            r'LiFePO4', r'3\.2V', r'Prismatic', r'Rechargeable', 
+            r'Battery', r'Cell', r'\d+\s*Ah' # Ємність вже є на початку
+        ]
+        
+        for word in remove_words:
+            text = re.sub(f'(?i){word}', '', text)
+            
+        # 3. Видаляємо зайві символи та пробіли
+        text = text.replace(' - ', ' ').replace(' , ', ' ')
+        
+        # Видаляємо дублікати пробілів
+        text = ' '.join(text.split())
+        
+        # Максимальна довжина (обрізаємо якщо задовга)
+        if len(text) > 30:
+            text = text[:28] + ".."
+            
+        return text.strip()
+
     def format_telegram_message(self, changes: Dict) -> str:
         """Форматування повідомлення для Telegram"""
         msg = "🔋 *NKON LiFePO4 Monitor*\n\n"
@@ -398,16 +440,34 @@ class NkonMonitor:
         has_changes = False
         threshold = self.config.get('price_alert_threshold', 5)
         
+        def format_line(item, prefix_emoji="", show_status=False):
+            """Helper для форматування одного рядка товару"""
+            grade = self._extract_grade(item['name'])
+            short_name = self._shorten_name(item['name'])
+            price = item.get('price', 'N/A')
+            
+            # Емодзі грейду
+            grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
+            if grade == "?": grade_msg = ""
+            else: grade_msg = f"{grade_emoji} {grade} | "
+            
+            # Статус (Pre-order/In Stock)
+            status_ico = ""
+            if item.get('stock_status') == 'preorder':
+                status_ico = " 📦Pre"
+            elif item.get('stock_status') == 'out_of_stock':
+                status_ico = " ❌Out"
+                
+            link_text = f"[{item['capacity']}Ah]({item['link']})"
+            
+            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} - {price}{status_ico}"
+
         # Нові товари
         if changes.get('new'):
             has_changes = True
             msg += f"✨ *Нові товари ({len(changes['new'])}):*\n"
             for item in changes['new']:
-                price = item.get('price', 'N/A')
-                msg += f"• [{item['capacity']}Ah]({item['link']}) - {price}"
-                if item.get('stock_status') == 'preorder':
-                    msg += " 📦 Pre-order"
-                msg += "\n"
+                msg += format_line(item, "•") + "\n"
             msg += "\n"
         
         # Зміни цін
@@ -434,7 +494,10 @@ class NkonMonitor:
                     except ZeroDivisionError:
                         pass
                 
-                msg += f"• [{item['capacity']}Ah]({item['link']}) - {change_str}\n"
+                grade = self._extract_grade(item['name'])
+                grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
+                
+                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} - {change_str}\n"
             msg += "\n"
         
         # Зміни статусу
@@ -447,11 +510,13 @@ class NkonMonitor:
                 price = item.get('price', 'N/A')
                 
                 status_emoji = "✅" if new_status == 'in_stock' else "📦"
-                old_status_str = "Pre-order" if old_status == 'preorder' else "In Stock"
-                new_status_str = "Pre-order" if new_status == 'preorder' else "In Stock"
+                old_str = "Pre" if old_status == 'preorder' else "In"
+                new_str = "Pre" if new_status == 'preorder' else "In"
                 
-                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) - {price}\n"
-                msg += f"   Status: {old_status_str} → {new_status_str}\n"
+                grade_raw = self._extract_grade(item['name'])
+                grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️"
+                
+                msg += f"• {status_emoji} [{item['capacity']}Ah] {grade_ico} {old_str}→{new_str} - {price}\n"
             msg += "\n"
         
         # Видалені товари
@@ -459,12 +524,16 @@ class NkonMonitor:
             has_changes = True
             msg += f"❌ *Видалені ({len(changes['removed'])}):*\n"
             for item in changes['removed']:
-                msg += f"• [{item['capacity']}Ah] {item['name']}\n"
+                msg += f"• [{item['capacity']}Ah] {self._shorten_name(item['name'])}\n"
             msg += "\n"
         
             msg += "\n"
+            
+        # Якщо змін немає, чи показувати повний список?
+        # Логіка: Якщо це перший запуск (new > 0) -> показуємо все як new.
+        # Якщо змін немає взагалі -> "Без змін"
+        # Якщо є зміни -> "Без змін"
         
-        # Товари без змін (для повної картини)
         # Збираємо лінки товарів, що змінилися
         changed_links = set()
         for item in changes.get('new', []): changed_links.add(item['link'])
@@ -478,9 +547,9 @@ class NkonMonitor:
         if unchanged:
             msg += f"📋 *Без змін ({len(unchanged)}):*\n"
             for item in unchanged:
-                price = item.get('price', 'N/A')
-                status_emoji = "✅" if item.get('stock_status') == 'in_stock' else "📦"
-                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) - {price}\n"
+                status_emoji = "✅ " if item.get('stock_status') == 'in_stock' else "" # Preorder без іконки щоб не спамити? Або 📦
+                # Використовуємо новий формат
+                msg += format_line(item, "•", show_status=True) + "\n"
         
         msg += f"\n🕒 _{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}_"
         return msg    
