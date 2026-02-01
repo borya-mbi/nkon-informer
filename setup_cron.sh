@@ -69,7 +69,7 @@ echo ""
 
 # Перевірка залежностей
 echo "Перевірка Python залежностей..."
-if ! $PYTHON_PATH -c "import selenium, bs4, requests" &> /dev/null; then
+if ! $PYTHON_PATH -c "import selenium, bs4, requests, dotenv, webdriver_manager" &> /dev/null; then
     echo "⚠️  Деякі залежності відсутні."
     read -p "Встановити зараз? (y/n) " -n 1 -r
     echo ""

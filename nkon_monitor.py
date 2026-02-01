@@ -84,7 +84,7 @@ class NkonMonitor:
             
             config['min_capacity_ah'] = int(os.getenv('MIN_CAPACITY_AH', 200))
             config['price_alert_threshold'] = int(os.getenv('PRICE_ALERT_THRESHOLD', 5))
-            config['url'] = os.getenv('NKON_URL', 'https://www.nkon.nl/rechargeable/lifepo4/prismatisch.html?___store=en')
+            config['url'] = os.getenv('NKON_URL', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
             return config
         
         # Fallback до config.json
@@ -276,34 +276,11 @@ class NkonMonitor:
         if link and not link.startswith('http'):
             link = 'https://www.nkon.nl' + link
         
-        # Ціна (Спроба знайти ціну без ПДВ - Excl. Tax)
-        price_elem = None
-        includes_tax = True  # Default: price includes tax
-
-        # 1. Спроба знайти по класу Magento (price-excluding-tax)
-        price_ex_tax = item.find(class_='price-excluding-tax')
-        if price_ex_tax:
-            price_sub = price_ex_tax.find(class_='price')
-            if price_sub:
-                price_elem = price_sub
-                includes_tax = False
+        # Ціна (UA магазин завжди показує ціни без ПДВ)
+        includes_tax = False
         
-        # 2. Якщо не знайдено по класу, шукаємо по тексту "Excl. Tax"
-        if not price_elem:
-            # Шукаємо всі елементи, що містять "Excl. Tax"
-            ex_tax_label = item.find(string=re.compile(r'Excl\.?\s*Tax', re.I))
-            if ex_tax_label:
-                # Зазвичай ціна знаходиться в батьківському елементі або поруч
-                parent = ex_tax_label.parent
-                # Шукаємо ціну в цьому ж контейнері
-                price_candidate = parent.find(class_='price')
-                # Або в наступному елементі
-                if not price_candidate:
-                    price_candidate = parent.find_next(class_='price')
-                
-                if price_candidate:
-                    price_elem = price_candidate
-                    includes_tax = False
+        # Беремо головну ціну
+        price_elem = item.find('span', class_='price')
 
         # Fallback: Якщо все одно не знайдено, беремо головну ціну (припускаємо що це з ПДВ)
         if not price_elem:
@@ -486,7 +463,7 @@ class NkonMonitor:
             short_name = self._shorten_name(item['name'])
             price = item.get('price', 'N/A')
             
-            # Додаємо (VAT) якщо ціна з податком
+            # Додаємо уточнення
             if item.get('includes_tax', False):
                 price += " (VAT)"
             
@@ -499,6 +476,8 @@ class NkonMonitor:
             status_ico = ""
             if item.get('stock_status') == 'preorder':
                 status_ico = " 📦Pre"
+            elif item.get('stock_status') == 'in_stock':
+                status_ico = " ✅In"
             elif item.get('stock_status') == 'out_of_stock':
                 status_ico = " ❌Out"
                 
@@ -542,7 +521,7 @@ class NkonMonitor:
                 grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
                 short_name = self._shorten_name(item['name'])
 
-                # Додаємо (VAT) до рядка зміни
+                 # Додаємо (VAT) до рядка зміни
                 if item.get('includes_tax', False):
                      change_str += " (VAT)"
                 
@@ -673,7 +652,7 @@ class NkonMonitor:
         
         try:
             # Завантаження сторінки
-            url = self.config.get('url', 'https://www.nkon.nl/rechargeable/lifepo4/prismatisch.html?___store=en')
+            url = self.config.get('url', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
             html = self.fetch_page_with_selenium(url)
             
             # Парсинг товарів
