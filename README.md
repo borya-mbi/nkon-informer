@@ -101,7 +101,7 @@ python nkon_monitor.py
 
 1. Відкрийте Telegram і знайдіть [@BotFather](https://t.me/BotFather)
 2. Створіть нового бота командою `/newbot`
-3. Скопіюйте **Bot Token** (виглядає як `110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw`)
+3. Скопіюйте **Bot Token** (виглядає як `123456789:ABCdefGHIjklMNOpqrsTUVwxYZ`)
 4. Отримайте ваш **Chat ID**:
    
    **Для особистого чату:**
