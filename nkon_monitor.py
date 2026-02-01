@@ -277,23 +277,44 @@ class NkonMonitor:
             link = 'https://www.nkon.nl' + link
         
         # Ціна (Спроба знайти ціну без ПДВ - Excl. Tax)
-        # Magento 2: span.price-excluding-tax > span.price
-        price_ex_tax = item.find('span', class_='price-excluding-tax')
         price_elem = None
-        
+        includes_tax = True  # Default: price includes tax
+
+        # 1. Спроба знайти по класу Magento (price-excluding-tax)
+        price_ex_tax = item.find(class_='price-excluding-tax')
         if price_ex_tax:
-            price_elem = price_ex_tax.find('span', class_='price')
-            
-        # Fallback 1: Якщо не знайдено ex-tax, шукаємо звичайну ціну
+            price_sub = price_ex_tax.find(class_='price')
+            if price_sub:
+                price_elem = price_sub
+                includes_tax = False
+        
+        # 2. Якщо не знайдено по класу, шукаємо по тексту "Excl. Tax"
+        if not price_elem:
+            # Шукаємо всі елементи, що містять "Excl. Tax"
+            ex_tax_label = item.find(string=re.compile(r'Excl\.?\s*Tax', re.I))
+            if ex_tax_label:
+                # Зазвичай ціна знаходиться в батьківському елементі або поруч
+                parent = ex_tax_label.parent
+                # Шукаємо ціну в цьому ж контейнері
+                price_candidate = parent.find(class_='price')
+                # Або в наступному елементі
+                if not price_candidate:
+                    price_candidate = parent.find_next(class_='price')
+                
+                if price_candidate:
+                    price_elem = price_candidate
+                    includes_tax = False
+
+        # Fallback: Якщо все одно не знайдено, беремо головну ціну (припускаємо що це з ПДВ)
         if not price_elem:
             price_elem = item.find('span', class_='price')
+            # Якщо ми взяли головну ціну, includes_tax залишається True
             
-        # Fallback 2: Якщо все одно не знайдено, спробуємо знайти будь-який текст з валютою
+        # Fallback 2: Текст з валютою
         price_raw = 'N/A'
         if price_elem:
             price_raw = price_elem.get_text(strip=True)
         else:
-            # Спроба знайти хоч щось схоже на ціну
             logger.warning(f"Ціну не знайдено для {name}, шукаємо альтернативи...")
             
         price_float = self.clean_price(price_raw)
@@ -309,6 +330,7 @@ class NkonMonitor:
             'capacity': capacity,
             'price': price_raw,      # Оригінальний текст для відображення
             'price_value': price_float, # Числове значення для аналізу
+            'includes_tax': includes_tax, # Boolean: True if VAT included
             'link': link,
             'stock_status': stock_status,  # 'in_stock' або 'preorder'
             'timestamp': datetime.now().isoformat()
@@ -464,6 +486,10 @@ class NkonMonitor:
             short_name = self._shorten_name(item['name'])
             price = item.get('price', 'N/A')
             
+            # Додаємо (VAT) якщо ціна з податком
+            if item.get('includes_tax', False):
+                price += " (VAT)"
+            
             # Емодзі грейду
             grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
             if grade == "?": grade_msg = ""
@@ -515,6 +541,10 @@ class NkonMonitor:
                 grade = self._extract_grade(item['name'])
                 grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
                 short_name = self._shorten_name(item['name'])
+
+                # Додаємо (VAT) до рядка зміни
+                if item.get('includes_tax', False):
+                     change_str += " (VAT)"
                 
                 msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} - {change_str}\n"
             msg += "\n"
@@ -527,6 +557,10 @@ class NkonMonitor:
                 new_status = item.get('new_status')
                 old_status = item.get('old_status')
                 price = item.get('price', 'N/A')
+                
+                # Додаємо VAT
+                if item.get('includes_tax', False):
+                    price += " (VAT)"
                 
                 status_emoji = "✅" if new_status == 'in_stock' else "📦"
                 old_str = "Pre" if old_status == 'preorder' else "In"
