@@ -11,6 +11,29 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Check and set Timezone
+CURRENT_TZ=$(cat /etc/timezone 2>/dev/null || date +%Z)
+TARGET_TZ="Europe/Kyiv"
+
+echo -e "${CYAN}--- System Timezone Setup ---${NC}"
+echo -e "Current timezone: ${YELLOW}$CURRENT_TZ${NC}"
+
+if [[ "$CURRENT_TZ" != "$TARGET_TZ" ]]; then
+    read -p "Do you want to set timezone to $TARGET_TZ (Ukraine)? (y/N) " tz_confirm
+    if [[ $tz_confirm =~ ^[Yy]$ ]]; then
+        if command -v timedatectl &> /dev/null; then
+            sudo timedatectl set-timezone $TARGET_TZ
+            echo -e "${GREEN}Timezone set to $TARGET_TZ${NC}"
+            echo -e "Current time: $(date)"
+        else
+            echo -e "${RED}Error: timedatectl not found. Please set timezone manually.${NC}"
+        fi
+    fi
+else
+    echo -e "${GREEN}Timezone is already correct.${NC}"
+fi
+
+echo ""
 echo -e "${CYAN}--- NKON Monitor Setup (Linux) ---${NC}"
 echo -e "This script will generate a ${YELLOW}.env${NC} file for configuration."
 
