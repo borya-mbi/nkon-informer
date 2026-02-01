@@ -152,7 +152,7 @@ python nkon_monitor.py
 - `PRICE_ALERT_THRESHOLD`: Поріг зміни ціни % (default: 5)
 ```json
 {
-  "telegram_bot_token": "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+  "telegram_bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
   "telegram_chat_id": "123456789",
   "min_capacity_ah": 200,
   "url": "https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html"
@@ -162,7 +162,7 @@ python nkon_monitor.py
 **Для декількох чатів (особисті чати та групи):**
 ```json
 {
-  "telegram_bot_token": "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+  "telegram_bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
   "telegram_chat_ids": [
     "123456789",
     "987654321",

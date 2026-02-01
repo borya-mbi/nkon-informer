@@ -281,21 +281,19 @@ class NkonMonitor:
         
         # Беремо головну ціну
         price_elem = item.find('span', class_='price')
-
-        # Fallback: Якщо все одно не знайдено, беремо головну ціну (припускаємо що це з ПДВ)
-        if not price_elem:
-            price_elem = item.find('span', class_='price')
-            # Якщо ми взяли головну ціну, includes_tax залишається True
             
-        # Fallback 2: Текст з валютою
         price_raw = 'N/A'
         if price_elem:
             price_raw = price_elem.get_text(strip=True)
         else:
-            logger.warning(f"Ціну не знайдено для {name}, шукаємо альтернативи...")
+            logger.warning(f"Ціну не знайдено для {name}")
             
         price_float = self.clean_price(price_raw)
         
+        # Нормалізація відображення ціни (завжди €52.95 замість 52,95 EUR)
+        if price_float is not None:
+            price_raw = f"€{price_float:.2f}"
+            
         # Статус наявності
         stock_status = self._check_stock_status(item)
         
@@ -463,10 +461,6 @@ class NkonMonitor:
             short_name = self._shorten_name(item['name'])
             price = item.get('price', 'N/A')
             
-            # Додаємо уточнення
-            if item.get('includes_tax', False):
-                price += " (VAT)"
-            
             # Емодзі грейду
             grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
             if grade == "?": grade_msg = ""
@@ -520,10 +514,6 @@ class NkonMonitor:
                 grade = self._extract_grade(item['name'])
                 grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
                 short_name = self._shorten_name(item['name'])
-
-                 # Додаємо (VAT) до рядка зміни
-                if item.get('includes_tax', False):
-                     change_str += " (VAT)"
                 
                 msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} - {change_str}\n"
             msg += "\n"
@@ -537,16 +527,13 @@ class NkonMonitor:
                 old_status = item.get('old_status')
                 price = item.get('price', 'N/A')
                 
-                # Додаємо VAT
-                if item.get('includes_tax', False):
-                    price += " (VAT)"
-                
                 status_emoji = "✅" if new_status == 'in_stock' else "📦"
                 old_str = "Pre" if old_status == 'preorder' else "In"
                 new_str = "Pre" if new_status == 'preorder' else "In"
                 
                 grade_raw = self._extract_grade(item['name'])
                 grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️"
+                short_name = self._shorten_name(item['name'])
                 
                 msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_ico} {short_name} | {old_str} → {new_str} - {price}\n"
             msg += "\n"
