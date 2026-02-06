@@ -2,97 +2,153 @@
 
 # Setup environment variables for NKON Monitor (Linux/Mac)
 # This script interactively asks for configuration and saves it to a .env file.
-# This ensures variables are available for Cron jobs and the Python script.
 
 # Colors
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
-# Check and set Timezone
-CURRENT_TZ=$(cat /etc/timezone 2>/dev/null || date +%Z)
-TARGET_TZ="Europe/Kyiv"
+# Function to read existing value from .env
+get_current_value() {
+    local key=$1
+    if [ -f ".env" ]; then
+        grep "^${key}=" .env | cut -d '=' -f2- | tr -d '\r'
+    fi
+}
 
-echo -e "${CYAN}--- System Timezone Setup ---${NC}"
-echo -e "Current timezone: ${YELLOW}$CURRENT_TZ${NC}"
-
-if [[ "$CURRENT_TZ" != "$TARGET_TZ" ]]; then
-    read -p "Do you want to set timezone to $TARGET_TZ (Ukraine)? (y/N) " tz_confirm
-    if [[ $tz_confirm =~ ^[Yy]$ ]]; then
-        if command -v timedatectl &> /dev/null; then
-            sudo timedatectl set-timezone $TARGET_TZ
-            echo -e "${GREEN}Timezone set to $TARGET_TZ${NC}"
-            echo -e "Current time: $(date)"
-        else
-            echo -e "${RED}Error: timedatectl not found. Please set timezone manually.${NC}"
+# Function to ask for variable with "Keep Existing" logic
+ask_variable() {
+    local name=$1
+    local prompt_text=$2
+    local required=$3
+    local default_value=$4
+    
+    local current=$(get_current_value "$name")
+    local prompt="$prompt_text"
+    
+    # Display current value mask/hint
+    if [ -n "$current" ]; then
+        local display="$current"
+        # Mask sensitive data
+        if [[ "$name" == *"TOKEN"* ]]; then
+            if [ ${#current} -gt 8 ]; then
+                display="${current:0:4}...${current: -4}"
+            else
+                display="***"
+            fi
         fi
+        prompt="$prompt [Current: $display]"
+    elif [ -n "$default_value" ]; then
+        prompt="$prompt [Default: $default_value]"
     fi
-else
-    echo -e "${GREEN}Timezone is already correct.${NC}"
-fi
-
-echo ""
-echo -e "${CYAN}--- NKON Monitor Setup (Linux) ---${NC}"
-echo -e "This script will generate a ${YELLOW}.env${NC} file for configuration."
-
-# Check if .env exists
-if [ -f ".env" ]; then
-    echo -e "${YELLOW}Warning: .env file already exists and will be overwritten.${NC}"
-    read -p "Continue? (y/N) " confirm
-    if [[ ! $confirm =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# 1. Telegram Token
-while true; do
+    
     echo ""
-    read -p "Enter TELEGRAM_BOT_TOKEN: " token
-    if [ -n "$token" ]; then
+    read -p "$prompt: " input_val
+    
+    if [ -z "$input_val" ]; then
+        if [ -n "$current" ]; then
+            echo "$current"
+            return
+        fi
+        if [ -n "$default_value" ]; then
+            echo "$default_value"
+            return
+        fi
+    else
+        echo "$input_val"
+        return
+    fi
+    
+    if [ "$required" = "true" ]; then
+        return 1
+    fi
+    
+    echo "" 
+}
+
+echo -e "${CYAN}--- NKON Monitor Setup (Linux .env) ---${NC}"
+
+if [ -f ".env" ]; then
+    echo -e "${YELLOW}Found existing .env file. Press Enter to keep current values.${NC}"
+fi
+
+# 1. Telegram Token (Required)
+while true; do
+    token=$(ask_variable "TELEGRAM_BOT_TOKEN" "Enter TELEGRAM_BOT_TOKEN" "true")
+    if [ $? -eq 0 ] && [ -n "$token" ]; then
         break
     else
         echo -e "${RED}Token cannot be empty!${NC}"
     fi
 done
 
-# 2. Chat IDs
-echo ""
-echo -e "Enter Chat IDs (separated by comma, e.g. 123456789,-100987654321)"
-while true; do
-    read -p "Enter TELEGRAM_CHAT_IDS: " chat_ids
-    if [ -n "$chat_ids" ]; then
-        break
-    else
-        echo -e "${RED}Chat IDs cannot be empty!${NC}"
-    fi
-done
+# 2. Granular Chat IDs
+echo -e "\n${YELLOW}Configuration for Notifications:${NC}"
+chat_ids_full=$(ask_variable "TELEGRAM_CHAT_IDS_FULL" "Enter Chat IDs for FULL Reports (comma separated)" "false")
+chat_ids_changes=$(ask_variable "TELEGRAM_CHAT_IDS_CHANGES_ONLY" "Enter Chat IDs for CHANGES ONLY (comma separated)" "false")
 
-# 3. Min Capacity
-echo ""
-read -p "Enter MIN_CAPACITY_AH (Default: 200): " min_cap
-min_cap=${min_cap:-200}
+# Logic: Remove Changes IDs from Full IDs to avoid duplicates
+if [ -n "$chat_ids_full" ] && [ -n "$chat_ids_changes" ]; then
+    # Convert changes to array
+    IFS=',' read -r -a changes_array <<< "$chat_ids_changes"
+    
+    # Clean full list
+    cleaned_full=""
+    IFS=',' read -r -a full_array <<< "$chat_ids_full"
+    
+    for id in "${full_array[@]}"; do
+        # Trim whitespace
+        id=$(echo "$id" | xargs)
+        
+        is_duplicate=false
+        for change_id in "${changes_array[@]}"; do
+             change_id=$(echo "$change_id" | xargs)
+             if [ "$id" == "$change_id" ]; then
+                 is_duplicate=true
+                 break
+             fi
+        done
+        
+        if [ "$is_duplicate" == "false" ] && [ -n "$id" ]; then
+            if [ -n "$cleaned_full" ]; then
+                cleaned_full="$cleaned_full,$id"
+            else
+                cleaned_full="$id"
+            fi
+        elif [ "$is_duplicate" == "true" ]; then
+            echo -e "${GRAY}Notice: ID $id removed from FULL list because it is in CHANGES ONLY list.${NC}"
+        fi
+    done
+    
+    chat_ids_full="$cleaned_full"
+fi
 
-# 4. Price Threshold
-echo ""
-read -p "Enter PRICE_ALERT_THRESHOLD (Default: 5): " threshold
-threshold=${threshold:-5}
+# 4. Settings
+min_cap=$(ask_variable "MIN_CAPACITY_AH" "Enter MIN_CAPACITY_AH" "false" "200")
+threshold=$(ask_variable "PRICE_ALERT_THRESHOLD" "Enter PRICE_ALERT_THRESHOLD" "false" "5")
 
-# Write to .env
-cat > .env <<EOL
+# Generate .env content
+temp_env=$(mktemp)
+
+cat > "$temp_env" <<EOL
 TELEGRAM_BOT_TOKEN=$token
-TELEGRAM_CHAT_IDS=$chat_ids
+TELEGRAM_CHAT_IDS_FULL=$chat_ids_full
+TELEGRAM_CHAT_IDS_CHANGES_ONLY=$chat_ids_changes
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
+# Legacy cleared
+TELEGRAM_CHAT_IDS=
 EOL
+
+# Move temp file to .env
+mv "$temp_env" .env
 
 # Set secure permissions
 chmod 600 .env
 
 echo ""
 echo -e "${GREEN}[SUCCESS] Configuration saved to .env file!${NC}"
-echo -e "Permissions set to 600 (read/write only for owner)."
-echo ""
-echo -e "You can now run the monitor:"
-echo -e "  ${CYAN}python3 nkon_monitor.py --dry-run${NC}"
+echo -e "Legacy TELEGRAM_CHAT_IDS has been cleared."

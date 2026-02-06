@@ -57,7 +57,21 @@ class NkonMonitor:
         """
         self.config = self._load_config_with_env(config_path)
         self.state_file = 'state.json'
-        self.previous_state = self._load_state()
+        self.previous_state = {}
+        self.last_messages = {}
+        
+        # Завантаження стану
+        loaded_state = self._load_state()
+        
+        # Обробка версій State
+        if loaded_state.get('version') == 2:
+            self.previous_state = loaded_state.get('products', {})
+            self.last_messages = loaded_state.get('last_messages', {})
+        else:
+            # Legacy state (just products)
+            self.previous_state = loaded_state
+            self.last_messages = {}
+            
         self.session = requests.Session()  # Для anti-ban (Telegram API)
 
     def _load_config_with_env(self, config_path: str) -> Dict:
@@ -69,7 +83,7 @@ class NkonMonitor:
         env_loaded = load_dotenv()
         
         bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        chat_ids_str = os.getenv('TELEGRAM_CHAT_IDS')
+
         
         if bot_token:
             if env_loaded:
@@ -78,9 +92,22 @@ class NkonMonitor:
                 logger.info("Використовуються змінні середовища для конфігурації")
                 
             config['telegram_bot_token'] = bot_token
-            # Парсинг чатів з рядка "id1,id2"
-            if chat_ids_str:
-                config['telegram_chat_ids'] = [cid.strip() for cid in chat_ids_str.split(',') if cid.strip()]
+            # Load specific configurations
+            chat_ids_full_str = os.getenv('TELEGRAM_CHAT_IDS_FULL', '')
+            chat_ids_changes_str = os.getenv('TELEGRAM_CHAT_IDS_CHANGES_ONLY', '')
+            
+            # Parse into sets
+            recipients_full = {cid.strip() for cid in chat_ids_full_str.split(',') if cid.strip()}
+            recipients_changes = {cid.strip() for cid in chat_ids_changes_str.split(',') if cid.strip()}
+            
+            # STRICT SEPARATION: If an ID is in 'Changes Only', remove it from 'Full'
+            # (Assuming specific overrides general)
+            recipients_full = recipients_full - recipients_changes
+            
+            config['recipients_full'] = recipients_full
+            config['recipients_changes'] = recipients_changes
+            
+            logger.info(f"Налаштування: Full={len(recipients_full)}, Changes={len(recipients_changes)} отримувачів")
             
             config['min_capacity_ah'] = int(os.getenv('MIN_CAPACITY_AH', 200))
             config['price_alert_threshold'] = int(os.getenv('PRICE_ALERT_THRESHOLD', 5))
@@ -88,14 +115,24 @@ class NkonMonitor:
             return config
         
         # Fallback до config.json
-        if missing_env:
-            logger.warning(f"⚠️  Змінні середовища не знайдено: {', '.join(missing_env)}")
+        if not env_loaded:
             logger.info("Спроба завантажити config.json...")
             
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     file_config = json.load(f)
                     config.update(file_config)
+                    
+                    # Обробка JSON конфігу
+                    json_full = set(file_config.get('telegram_chat_ids_full', []))
+                    json_changes = set(file_config.get('telegram_chat_ids_changes_only', []))
+                    
+                    # Strict separation
+                    json_full = json_full - json_changes
+                    
+                    config['recipients_full'] = json_full
+                    config['recipients_changes'] = json_changes
+                    
                     logger.info("✅ Конфігурацію завантажено з config.json")
             except FileNotFoundError:
                 logger.error("❌ ПОМИЛКА: Не знайдено налаштувань!")
@@ -345,7 +382,7 @@ class NkonMonitor:
         Returns:
             Словник зі змінами
         """
-        current_state = {p['link']: p for p in current_products}
+        current_state = {f"{p['link']}_{p.get('capacity', '0')}": p for p in current_products}
         
         new_items = []
         removed_items = []
@@ -457,8 +494,25 @@ class NkonMonitor:
             
         return text.strip()
 
-    def format_telegram_message(self, changes: Dict) -> str:
-        """Форматування повідомлення для Telegram"""
+    def _mask_sensitive(self, text: str) -> str:
+        """Маскування чутливих даних в логах"""
+        if not text: return ""
+        text_str = str(text)
+        if len(text_str) <= 12:
+            return "***"
+        return f"{text_str[:4]}***{text_str[-4:]}"
+
+    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True) -> Optional[str]:
+        """
+        Форматування повідомлення для Telegram
+        
+        Args:
+            changes: Словник зі змінами
+            include_unchanged: Чи включати блок "Без змін"
+            
+        Returns:
+            Текст повідомлення або None, якщо немає чого відправляти
+        """
         msg = "🔋 *NKON LiFePO4 Monitor*\n\n"
         
         has_changes = False
@@ -559,8 +613,10 @@ class NkonMonitor:
             
         # Якщо змін немає, чи показувати повний список?
         # Логіка: Якщо це перший запуск (new > 0) -> показуємо все як new.
-        # Якщо змін немає взагалі -> "Без змін"
-        # Якщо є зміни -> "Без змін"
+        # Якщо немає активних змін (new/removed/price/status) і include_unchanged=False -> повертаємо None
+        
+        if not has_changes and not include_unchanged:
+            return None
         
         # Збираємо лінки товарів, що змінилися
         changed_links = set()
@@ -568,56 +624,75 @@ class NkonMonitor:
         for item in changes.get('price_changes', []): changed_links.add(item['link'])
         for item in changes.get('status_changes', []): changed_links.add(item['link'])
         
-        # Знаходимо незмінені
-        current = changes.get('current', [])
-        unchanged = [p for p in current if p['link'] not in changed_links]
-        
-        if unchanged:
-            msg += f"📋 *Без змін ({len(unchanged)}):*\n"
-            for item in unchanged:
-                status_emoji = "✅ " if item.get('stock_status') == 'in_stock' else "" # Preorder без іконки щоб не спамити? Або 📦
-                # Використовуємо новий формат
-                msg += format_line(item, "•", show_status=True) + "\n"
+        # Включаємо блок "Без змін" тільки якщо просили
+        if include_unchanged:
+            current = changes.get('current', [])
+            unchanged = [p for p in current if p['link'] not in changed_links]
+            
+            if unchanged:
+                msg += f"📋 *Без змін ({len(unchanged)}):*\n"
+                for item in unchanged:
+                    status_emoji = "✅ " if item.get('stock_status') == 'in_stock' else "" 
+                    msg += format_line(item, "•", show_status=True) + "\n"
         
         msg += f"\n🕒 _{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}_"
         return msg    
-    def send_telegram_message(self, message: str, dry_run: bool = False):
+
+    
+    def edit_telegram_message(self, chat_id: str, message_id: int, text: str) -> bool:
         """
-        Відправка повідомлення в Telegram (підтримує декілька чатів)
+        Редагування існуючого повідомлення
+        """
+        bot_token = self.config.get('telegram_bot_token')
+        if not bot_token: return False
         
-        Args:
-            message: Текст повідомлення
-            dry_run: Якщо True, не відправляти реально
+        url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
+        payload = {
+            'chat_id': chat_id,
+            'message_id': message_id,
+            'text': text,
+            'parse_mode': 'Markdown',
+            'disable_web_page_preview': False
+        }
+        
+        masked_chat = self._mask_sensitive(chat_id)
+        
+        try:
+            response = self.session.post(url, json=payload, timeout=10)
+            if not response.ok:
+                logger.warning(f"Не вдалося відредагувати повідомлення {masked_chat}/{message_id}: {response.text}")
+                return False
+            logger.info(f"✏️ Повідомлення {message_id} у чаті {masked_chat} оновлено")
+            return True
+        except Exception as e:
+            logger.warning(f"Помилка редагування в {masked_chat}: {e}")
+            return False
+
+    def send_telegram_message(self, message: str, chat_ids: Set[str] = None, dry_run: bool = False) -> Dict[str, int]:
         """
+        Відправка повідомлення в Telegram
+        Returns: Dict {chat_id: message_id}
+        """
+        sent_messages = {}
+        if not chat_ids:
+            return sent_messages
+
         if dry_run:
-            logger.info(f"[DRY RUN] Telegram повідомлення:\n{message}")
-            return
+            logger.info(f"[DRY RUN] Telegram повідомлення для {[self._mask_sensitive(c) for c in chat_ids]}:\n{message}")
+            return sent_messages
         
         bot_token = self.config.get('telegram_bot_token')
-        
-        # Підтримка нового формату (список) та старого формату (рядок)
-        chat_ids = self.config.get('telegram_chat_ids')
-        if not chat_ids:
-            # Зворотна сумісність зі старим форматом
-            chat_id = self.config.get('telegram_chat_id')
-            if chat_id:
-                chat_ids = [chat_id]
-        
-        if not bot_token or not chat_ids:
-            logger.error("Telegram credentials не налаштовані в config.json")
-            return
-        
-        # Перетворюємо на список, якщо це рядок
-        if isinstance(chat_ids, str):
-            chat_ids = [chat_ids]
+        if not bot_token:
+            logger.error("Telegram credentials не налаштовані")
+            return sent_messages
         
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         
-        # Відправка повідомлення кожному чату
         success_count = 0
-        total_count = len(chat_ids)
         
         for chat_id in chat_ids:
+            masked_chat = self._mask_sensitive(chat_id)
+            
             payload = {
                 'chat_id': chat_id,
                 'text': message,
@@ -627,13 +702,28 @@ class NkonMonitor:
             
             try:
                 response = self.session.post(url, json=payload, timeout=10)
+                
+                if not response.ok:
+                    logger.error(f"❌ Помилка Telegram API для {masked_chat}: {response.status_code} {response.text}")
                 response.raise_for_status()
+                
+                # Зберігаємо ID повідомлення
+                data = response.json()
+                if data.get('ok'):
+                    msg_id = data['result']['message_id']
+                    sent_messages[chat_id] = msg_id
+                
                 success_count += 1
-                logger.info(f"✅ Повідомлення відправлено до чату {chat_id}")
+                logger.info(f"✅ Повідомлення відправлено до чату {masked_chat}")
             except Exception as e:
-                logger.error(f"❌ Помилка відправки до чату {chat_id}: {e}")
+                # Вже залогували деталі вище, якщо це HTTPError
+                if not isinstance(e, requests.exceptions.HTTPError):
+                    logger.error(f"❌ Помилка відправки до чату {masked_chat}: {e}")
         
-        logger.info(f"📊 Відправлено {success_count}/{total_count} повідомлень")
+        if success_count > 0:
+            logger.info(f"📊 Відправлено {success_count}/{len(chat_ids)} повідомлень")
+            
+        return sent_messages
     
     def run(self, dry_run: bool = False):
         """
@@ -666,15 +756,86 @@ class NkonMonitor:
                         f"Змін цін: {len(changes['price_changes'])}, Змін статусу: {len(changes['status_changes'])}")
             
             # Форматування та відправка повідомлення
-            message = self.format_telegram_message(changes)
-            if message:
-                self.send_telegram_message(message, dry_run=dry_run)
-            else:
-                logger.info("Змін не виявлено, повідомлення не відправлено")
+            # 1. Обробка FULL отримувачів (Повні звіти або Редагування старого)
+            msg_full = self.format_telegram_message(changes, include_unchanged=True)
+            recipients_full = self.config.get('recipients_full', set())
+            
+            # Для FULL отримувачів - завжди НОВЕ повідомлення (з push-сповіщенням)
+            # Це головна різниця від Changes Only
+            last_messages = self.last_messages
+            new_last_messages = last_messages.copy()
+            
+            if recipients_full and msg_full:
+                logger.info(f"Відправка повного звіту {len(recipients_full)} отримувачам...")
+                sent = self.send_telegram_message(msg_full, chat_ids=recipients_full, dry_run=dry_run)
+                # Оновлюємо ID повідомлень (для можливого майбутнього використання)
+                for cid, mid in sent.items():
+                    new_last_messages[str(cid)] = mid
+
+            # 2. Обробка CHANGES ONLY (Окрема логіка для каналу)
+            # Логіка: Якщо є зміни - завжди НОВЕ повідомлення (залишається в історії).
+            #         Якщо немає змін - редагуємо одне повідомлення "Без змін".
+            msg_changes = self.format_telegram_message(changes, include_unchanged=False)
+            recipients_changes = self.config.get('recipients_changes', set())
+            
+            # Окремий трекер для "без змін" повідомлень
+            no_changes_messages = self.last_messages.get('_no_changes', {})
+            
+            if recipients_changes:
+                if msg_changes:
+                    # Є зміни - шлемо НОВЕ повідомлення
+                    logger.info(f"Відправка звіту про зміни {len(recipients_changes)} отримувачам...")
+                    self.send_telegram_message(msg_changes, chat_ids=recipients_changes, dry_run=dry_run)
+                    # Очищаємо ID "без змін" повідомлень, бо наступний "без змін" буде новим
+                    no_changes_messages = {}
+                else:
+                    # Немає змін - редагуємо або створюємо "Без змін" з повним списком товарів
+                    # Використовуємо format_telegram_message з include_unchanged=True
+                    no_changes_text = self.format_telegram_message(changes, include_unchanged=True)
+                    
+                    # Якщо з якоїсь причини текст пустий, створюємо базовий
+                    if not no_changes_text:
+                        from datetime import datetime
+                        no_changes_text = f"🔋 *NKON Monitor*\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                    
+                    for chat_id in recipients_changes:
+                        last_nc_msg_id = no_changes_messages.get(str(chat_id))
+                        
+                        if last_nc_msg_id and not dry_run:
+                            # Пробуємо редагувати
+                            success = self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text)
+                            if not success:
+                                # Не вдалось - шлемо нове
+                                sent = self.send_telegram_message(no_changes_text, chat_ids={chat_id}, dry_run=dry_run)
+                                if sent.get(chat_id):
+                                    no_changes_messages[str(chat_id)] = sent[chat_id]
+                        else:
+                            # Нема попереднього - шлемо нове
+                            sent = self.send_telegram_message(no_changes_text, chat_ids={chat_id}, dry_run=dry_run)
+                            if sent.get(chat_id):
+                                no_changes_messages[str(chat_id)] = sent[chat_id]
+                    
+                    logger.info("Оновлено 'Без змін' повідомлення для Changes Only")
+            
+            # Зберігаємо ID "без змін" повідомлень
+            new_last_messages['_no_changes'] = no_changes_messages
             
             # Збереження стану
-            current_state = {p['link']: p for p in products}
-            self._save_state(current_state)
+            # Використовуємо комбінацію лінка та ємності як унікальний ключ 
+            # (на випадок якщо NKON використовує однакові лінки для різних Grade/Capacity)
+            current_state = {}
+            for p in products:
+                key = f"{p['link']}_{p.get('capacity', '0')}"
+                current_state[key] = p
+            
+            state_to_save = {
+                'products': current_state,
+                'last_messages': new_last_messages,
+                'version': 2
+            }
+            
+            self._save_state(state_to_save)
+            logger.info(f"State збережено: {len(current_state)} товарів")
             
             logger.info("=" * 60)
             logger.info("Моніторинг завершено успішно")
@@ -689,9 +850,12 @@ class NkonMonitor:
             logger.error(f"Критична помилка: {e}", exc_info=True)
             
             # Спроба відправити помилку в Telegram (тільки якщо не dry_run)
+            # Спроба відправити помилку в Telegram (тільки адмінам з full списку)
             if not dry_run:
                 try:
-                    self.send_telegram_message(error_msg)
+                    admin_chats = self.config.get('recipients_full', set())
+                    if admin_chats:
+                        self.send_telegram_message(error_msg, chat_ids=admin_chats)
                 except Exception as send_err:
                     logger.error(f"Не вдалося відправити помилку в Telegram: {send_err}")
             

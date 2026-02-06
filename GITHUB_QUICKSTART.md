@@ -15,7 +15,7 @@
 
 ```powershell
 # Перейдіть у папку проєкту
-cd h:\1c8\Work\MBI\Education\AG\nkon-informer
+cd H:\Work\MBI\Education\AG\nkon-informer
 
 # Ініціалізація (якщо ще не зроблено)
 git init

@@ -104,7 +104,7 @@ git --version
 
 ```powershell
 # 1. Перейдіть у папку проєкту
-cd h:\1c8\Work\MBI\Education\AG\nkon-informer
+cd H:\Work\MBI\Education\AG\nkon-informer
 
 # 2. Ініціалізуйте Git
 git init

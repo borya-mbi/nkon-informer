@@ -62,10 +62,11 @@ pct enter <CTID>
 - [ ] `source venv/bin/activate`
 - [ ] `pip install -r requirements.txt`
 
-### Крок 5: Конфігурація
-- [ ] `cp config.example.json config.json`
-- [ ] `nano config.json` - вставити Bot Token та Chat ID(s)
-- [ ] `chmod 600 config.json`
+### Крок 5: Конфігурація (Рекомендовано!)
+- [ ] `./setup_env.sh` - запустити інтерактивне налаштування
+- [ ] Дотримуватися інструкцій (ввести Bot Token та розділити Chat IDs)
+- [ ] Переконатися, що створено файл `.env`
+- [ ] `chmod 600 .env`
 
 ### Крок 6: Тестування
 - [ ] **Dry-run:** `python nkon_monitor.py --dry-run`
@@ -119,8 +120,8 @@ pct enter <CTID>
 /root/nkon-informer/
 ├── nkon_monitor.py       ✓
 ├── requirements.txt      ✓
-├── config.json           ✓ (з вашими credentials)
-├── config.example.json   ✓
+├── .env                  ✓ (з вашими credentials)
+├── .env.example          ✓
 ├── state.json           (створюється автоматично)
 ├── nkon_monitor.log     (логи скрипта)
 ├── nkon_cron.log        (логи cron)
@@ -131,8 +132,8 @@ pct enter <CTID>
 
 ## 🛡️ Безпека
 
-- [ ] `chmod 600 /root/nkon-informer/config.json`
-- [ ] Не публікувати config.json в Git
+- [ ] `chmod 600 /root/nkon-informer/.env`
+- [ ] Не публікувати .env в Git
 - [ ] Регулярні оновлення: `apt update && apt upgrade`
 
 ---
@@ -171,7 +172,7 @@ python nkon_monitor.py --dry-run
 
 ```bash
 # Windows (PowerShell):
-scp -r h:\1c8\Work\MBI\Education\AG\nkon-informer\*.py root@<LXC_IP>:/root/nkon-informer/
+scp -r H:\Work\MBI\Education\AG\nkon-informer\*.py root@<LXC_IP>:/root/nkon-informer/
 
 # LXC:
 pct enter <CTID>

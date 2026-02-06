@@ -266,7 +266,7 @@ cd nkon-informer
 **Варіант Б: Ручне копіювання через SCP**
 ```bash
 # На вашому Windows комп'ютері (в PowerShell):
-# scp -r h:\1c8\Work\MBI\Education\AG\nkon-informer root@<PROXMOX_IP>:/root/
+# scp -r H:\Work\MBI\Education\AG\nkon-informer root@<PROXMOX_IP>:/root/
 
 # Потім в LXC:
 cd /root/nkon-informer
@@ -479,8 +479,8 @@ python nkon_monitor.py --dry-run
 ```bash
 # 1. На вашому Windows комп'ютері (PowerShell):
 # Скопіюйте оновлені файли на сервер
-scp -r h:\1c8\Work\MBI\Education\AG\nkon-informer\*.py root@<LXC_IP>:/root/nkon-informer/
-scp h:\1c8\Work\MBI\Education\AG\nkon-informer\requirements.txt root@<LXC_IP>:/root/nkon-informer/
+scp -r H:\Work\MBI\Education\AG\nkon-informer\*.py root@<LXC_IP>:/root/nkon-informer/
+scp H:\Work\MBI\Education\AG\nkon-informer\requirements.txt root@<LXC_IP>:/root/nkon-informer/
 
 # 2. В LXC контейнері:
 pct enter <CTID>
@@ -549,15 +549,15 @@ python nkon_monitor.py
 
 ## 🛡️ Безпека
 
-1. **Обмежте права доступу до config.json:**
+1. **Обмежте права доступу до .env:**
    ```bash
-   chmod 600 config.json
+   chmod 600 .env
    ```
 
-2. **Не публікуйте config.json в Git:**
+2. **Не публікуйте .env в Git:**
    ```bash
    # Перевірте .gitignore
-   cat .gitignore | grep config.json
+   cat .gitignore | grep .env
    ```
 
 3. **Регулярно оновлюйте систему:**
