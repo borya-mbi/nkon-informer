@@ -1,7 +1,7 @@
 # 🔋 NKON LiFePO4 Monitor
 
 <p align="center">
-  <img src="assets/nkon_informer.jpg" width="300" alt="NKON Monitor Preview">
+  <img src="assets/nkon_informer_banner.jpg" width="600" alt="NKON Monitor Banner">
 </p>
 
 Автоматизований моніторинг батарей LiFePO4 ємністю ≥200Ah на сайті [NKON](https://www.nkon.nl) з миттєвими сповіщеннями в Telegram та відстеженням змін.
@@ -378,3 +378,7 @@ MIT License - використовуйте вільно для особисти�
 ---
 
 **Приємного моніторингу! 🔋⚡**
+
+<p align="center">
+  <img src="assets/nkon_informer_logo.jpg" width="200" alt="NKON Monitor Logo">
+</p>
