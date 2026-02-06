@@ -45,3 +45,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project Assets (Keep heavy originals local only)
+assets/*.png

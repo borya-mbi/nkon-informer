@@ -45,8 +45,8 @@ ask_variable() {
         prompt="$prompt [Default: $default_value]"
     fi
     
-    echo ""
-    read -p "$prompt: " input_val
+    echo "" >&2
+    read -p "$prompt: " input_val >&2
     
     if [ -z "$input_val" ]; then
         if [ -n "$current" ]; then
@@ -66,7 +66,7 @@ ask_variable() {
         return 1
     fi
     
-    echo "" 
+    echo "" >&2
 }
 
 echo -e "${CYAN}--- NKON Monitor Setup (Linux .env) ---${NC}"
@@ -134,11 +134,23 @@ threshold=$(ask_variable "PRICE_ALERT_THRESHOLD" "Enter PRICE_ALERT_THRESHOLD" "
 temp_env=$(mktemp)
 
 cat > "$temp_env" <<EOL
+# Telegram Configuration
 TELEGRAM_BOT_TOKEN=$token
+
+# Notification Groups (Comma separated IDs)
+# Recipients for ALL reports (every run)
 TELEGRAM_CHAT_IDS_FULL=$chat_ids_full
+
+# Recipients for CHANGES ONLY (no spam if no changes)
 TELEGRAM_CHAT_IDS_CHANGES_ONLY=$chat_ids_changes
+
+# Thresholds
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
+
+# Monitor URL
+NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html
+
 # Legacy cleared
 TELEGRAM_CHAT_IDS=
 EOL
