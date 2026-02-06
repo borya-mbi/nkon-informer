@@ -380,5 +380,5 @@ MIT License - використовуйте вільно для особисти�
 **Приємного моніторингу! 🔋⚡**
 
 <p align="center">
-  <img src="assets/nkon_informer_logo.jpg" width="600" alt="NKON Monitor Logo">
+  <img src="assets/nkon_informer_logo.jpg" width="400" alt="NKON Monitor Logo">
 </p>
