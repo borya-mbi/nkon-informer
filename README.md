@@ -1,6 +1,8 @@
 # 🔋 NKON LiFePO4 Monitor
 
-![NKON Monitor Preview](assets/nkon_informer.jpg)
+<p align="center">
+  <img src="assets/nkon_informer.jpg" width="300" alt="NKON Monitor Preview">
+</p>
 
 Автоматизований моніторинг батарей LiFePO4 ємністю ≥200Ah на сайті [NKON](https://www.nkon.nl) з миттєвими сповіщеннями в Telegram та відстеженням змін.
 
