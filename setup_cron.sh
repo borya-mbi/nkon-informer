@@ -71,8 +71,8 @@ echo ""
 echo "Перевірка Python залежностей..."
 if ! $PYTHON_PATH -c "import selenium, bs4, requests, dotenv, webdriver_manager" &> /dev/null; then
     echo "⚠️  Деякі залежності відсутні."
-    read -p "Встановити зараз? (y/n) " -n 1 -r
-    echo ""
+    read -p "Встановити зараз? (y/n) " -n 1 -r >&2
+    echo "" >&2
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         $PYTHON_PATH -m pip install -r "$SCRIPT_DIR/requirements.txt"
         echo "✅ Залежності встановлено"
@@ -92,7 +92,7 @@ echo "2) Кожні 6 годин"
 echo "3) Тричі на день (9:00, 15:00, 21:00)"
 echo "4) Власний розклад (введіть вручну)"
 echo ""
-read -p "Ваш вибір (1-4): " choice
+read -p "Ваш вибір (1-4): " choice >&2
 
 case $choice in
     1)
@@ -108,8 +108,8 @@ case $choice in
         DESCRIPTION="тричі на день о 9:00, 15:00 та 21:00"
         ;;
     4)
-        read -p "Введіть cron вираз (наприклад, '0 9 * * *'): " CRON_SCHEDULE
-        DESCRIPTION="власний розклад: $CRON_SCHEDULE"
+        read -p "Введіть cron вираз (наприклад, '0 9 * * *'): " CRON_SCHEDULE >&2
+        DESCRIPTION="власний розклад: $CRON_SCHEDULE" >&2
         ;;
     *)
         echo "❌ Невірний вибір"
@@ -130,8 +130,8 @@ if crontab -l 2>/dev/null | grep -q "$PYTHON_SCRIPT"; then
     echo "⚠️  Cron job для цього скрипта вже існує!"
     crontab -l | grep "$PYTHON_SCRIPT"
     echo ""
-    read -p "Замінити? (y/n) " -n 1 -r
-    echo ""
+    read -p "Замінити? (y/n) " -n 1 -r >&2
+    echo "" >&2
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Операцію скасовано"
         exit 0
