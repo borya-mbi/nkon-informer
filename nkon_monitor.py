@@ -442,9 +442,12 @@ class NkonMonitor:
         status_changes = []
         
         # Пошук нових товарів та змін
+        is_first_run = not bool(self.previous_state)
+        
         for link, product in current_state.items():
             if link not in self.previous_state:
-                new_items.append(product)
+                if not is_first_run:
+                    new_items.append(product)
             else:
                 old_product = self.previous_state[link]
                 
