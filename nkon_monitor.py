@@ -589,11 +589,11 @@ class NkonMonitor:
             delivery_msg = ""
             
             if item.get('stock_status') == 'preorder':
-                status_ico = " 📦Pre"
+                status_ico = f" [📦Pre]({item['link']})"
                 if item.get('delivery_date'):
-                    delivery_msg = f"\n  └ 📅 {item['delivery_date']}"
+                    delivery_msg = f"\n  └─► [{item['delivery_date']}]({item['link']})"
             elif item.get('stock_status') == 'in_stock':
-                status_ico = " ✅In"
+                status_ico = f" [✅In]({item['link']})"
             elif item.get('stock_status') == 'out_of_stock':
                 status_ico = " ❌Out"
                 
@@ -665,9 +665,9 @@ class NkonMonitor:
                 new_date = item.get('new_date')
                 if new_date:
                     if old_date and old_date != new_date:
-                        date_msg = f"\n  └ 📅 {old_date} → {new_date}"
+                        date_msg = f"\n  └─► {old_date} → {new_date}"
                     else:
-                        date_msg = f"\n  └ 📅 {new_date}"
+                        date_msg = f"\n  └─► {new_date}"
                 
                 grade_raw = self._extract_grade(item['name'])
                 grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️" if "Grade B" in grade_raw else "❓"
