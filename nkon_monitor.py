@@ -13,6 +13,7 @@ import sys
 import time
 import random
 import argparse
+import shutil
 from logging.handlers import RotatingFileHandler
 from typing import List, Dict, Optional, Set
 from datetime import datetime
@@ -80,11 +81,9 @@ class NkonMonitor:
         
         # Спроба завантажити з .env
         from dotenv import load_dotenv
-        env_loaded = load_dotenv()
+        env_loaded = load_dotenv(override=True)
         
         bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-
-        
         if bot_token:
             if env_loaded:
                 logger.info("Використовується .env файл для конфігурації")
@@ -112,6 +111,8 @@ class NkonMonitor:
             config['min_capacity_ah'] = int(os.getenv('MIN_CAPACITY_AH', 200))
             config['price_alert_threshold'] = int(os.getenv('PRICE_ALERT_THRESHOLD', 5))
             config['url'] = os.getenv('NKON_URL', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
+            config['fetch_delivery_dates'] = os.getenv('FETCH_DELIVERY_DATES', 'true').lower() == 'true'
+            config['detail_fetch_delay'] = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
             return config
         
         # Fallback до config.json
@@ -132,6 +133,9 @@ class NkonMonitor:
                     
                     config['recipients_full'] = json_full
                     config['recipients_changes'] = json_changes
+                    
+                    config['fetch_delivery_dates'] = file_config.get('fetch_delivery_dates', True)
+                    config['detail_fetch_delay'] = float(file_config.get('detail_fetch_delay', 2.0))
                     
                     logger.info("✅ Конфігурацію завантажено з config.json")
             except FileNotFoundError:
@@ -155,71 +159,101 @@ class NkonMonitor:
         return {}
     
     def _save_state(self, items: Dict):
-        """Збереження поточного стану"""
+        """Збереження поточного стану з бекапом попереднього"""
         try:
+            # Ротація: зберігаємо попередній файл як .previous.json
+            if os.path.exists(self.state_file):
+                backup_file = self.state_file.replace('.json', '.previous.json')
+                shutil.copy2(self.state_file, backup_file)
+                # logger.debug(f"Створено бекап стейту: {backup_file}")
+                
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(items, f, ensure_ascii=False, indent=2)
-            logger.info(f"State збережено: {len(items)} товарів")
+            
+            # Логуємо кількість товарів, якщо це State v2 об'єкт
+            product_count = len(items.get('products', {})) if isinstance(items, dict) and 'products' in items else len(items)
+            logger.info(f"💾 State збережено до {self.state_file}: {product_count} товарів")
         except Exception as e:
             logger.error(f"Помилка збереження state: {e}")
     
-    def fetch_page_with_selenium(self, url: str) -> str:
-        """
-        Завантаження сторінки з використанням Selenium (для JS контенту)
-        
-        Args:
-            url: URL сторінки
-            
-        Returns:
-            HTML контент сторінки
-        """
-        logger.info(f"Завантаження сторінки: {url}")
-        
-        # Налаштування Chrome
+    def _init_driver(self):
+        """Ініціалізація Selenium Driver"""
         chrome_options = Options()
-        chrome_options.add_argument('--headless')  # Безголовий режим
+        chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
         chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        try:
-            # Автоматичне керування ChromeDriver
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=chrome_options)
+
+    def fetch_page_with_selenium(self, url: str, driver=None) -> str:
+        """
+        Завантаження сторінки з використанням Selenium
+        """
+        logger.info(f"Завантаження сторінки: {url}")
+        
+        local_driver = False
+        if driver is None:
+            driver = self._init_driver()
+            local_driver = True
             
-            # Anti-ban: Випадкова затримка перед запитом
+        try:
+            # Anti-ban delay
             delay = random.uniform(2, 5)
             logger.info(f"Anti-ban затримка: {delay:.2f} сек...")
             time.sleep(delay)
             
             driver.get(url)
+            time.sleep(5) # JS Load delay
             
-            # Очікування завантаження контенту (JavaScript)
-            logger.info("Очікування завантаження JavaScript контенту...")
-            time.sleep(5)  # Базова затримка
-            
-            # Спроба дочекатися появи товарів
             try:
                 WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "product-item"))
                 )
-                logger.info("Товари завантажено")
             except:
-                logger.warning("Час очікування товарів минув, продовжуємо...")
-            
+                pass
+                
             html = driver.page_source
-            driver.quit()
-            
-            logger.info(f"Сторінку завантажено ({len(html)} символів)")
             return html
-            
-        except Exception as e:
-            logger.error(f"Помилка при завантаженні сторінки: {e}")
-            if 'driver' in locals():
+        finally:
+            if local_driver and driver:
                 driver.quit()
-            raise
+            
+    def _fetch_delivery_date_details(self, url: str, driver) -> Optional[str]:
+        """
+        Отримання дати доставки через Selenium (бо requests блокує 403)
+        """
+        logger.info(f"Отримання детальної інформації про доставку (Selenium): {url}")
+        
+        delay = self.config.get('detail_fetch_delay', 2.0)
+        logger.info(f"Затримка перед запитом до товару: {delay} сек...")
+        time.sleep(delay)
+        
+        try:
+            driver.get(url)
+            # Очікування конкретного елемента
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "ampreorder-observed"))
+                )
+            except:
+                logger.warning(f"Елемент .ampreorder-observed не з'явився на {url}")
+            
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            date_elem = soup.select_one('.ampreorder-observed')
+            if date_elem:
+                match = re.search(r'(\d{1,2})-(\d{1,2})-(\d{4})', date_elem.get_text())
+                if match:
+                    # Нормалізація дати до DD-MM-YYYY (додавання нулів)
+                    d, m, y = match.groups()
+                    return f"{int(d):02d}-{int(m):02d}-{y}"
+            return None
+        except Exception as e:
+            logger.warning(f"Не вдалося отримати дату доставки для {url}: {e}")
+            return None
     
 
     def clean_price(self, price_text: str) -> Optional[float]:
@@ -233,10 +267,24 @@ class NkonMonitor:
             Ціна як float або None
         """
         try:
+            # Якщо є і кома, і крапка (наприклад, 1,234.50)
+            if ',' in price_text and '.' in price_text:
+                # Визначаємо, що є роздільником тисяч (той, що йде першим)
+                if price_text.find(',') < price_text.find('.'):
+                    price_text = price_text.replace(',', '') # Видаляємо кому
+                else:
+                    price_text = price_text.replace('.', '').replace(',', '.') # Видаляємо крапку, кому в крапку
+            
             # Видаляємо всі символи крім цифр, крапки та коми
             cleaned = re.sub(r'[^\d.,]', '', price_text)
-            # Замінюємо кому на крапку (європейський формат)
+            # Замінюємо кому на крапку (якщо вона залишилась як єдиний роздільник)
             cleaned = cleaned.replace(',', '.')
+            
+            # Якщо після заміни залишилось більше однієї крапки (наприклад, 1.234.50)
+            if cleaned.count('.') > 1:
+                parts = cleaned.split('.')
+                cleaned = "".join(parts[:-1]) + "." + parts[-1]
+                
             return float(cleaned)
         except (ValueError, AttributeError):
             return None
@@ -345,6 +393,7 @@ class NkonMonitor:
             'includes_tax': includes_tax, # Boolean: True if VAT included
             'link': link,
             'stock_status': stock_status,  # 'in_stock' або 'preorder'
+            'delivery_date': None,       # Буде заповнено пізніше в run() якщо preorder
             'timestamp': datetime.now().isoformat()
         }
     
@@ -412,22 +461,27 @@ class NkonMonitor:
                     price_changes.append({
                         'name': product['name'],
                         'capacity': product['capacity'],
-                        'link': link,
+                        'link': product['link'],
                         'old_price': old_product.get('price', 'N/A'),
                         'new_price': product.get('price', 'N/A'),
                         'old_price_value': old_price_val,
                         'new_price_value': new_price_val
                     })
                 
-                # Зміни статусу
-                if product['stock_status'] != old_product['stock_status']:
+                # Зміни статусу або дати доставки
+                status_changed = product['stock_status'] != old_product['stock_status']
+                date_changed = product.get('delivery_date') != old_product.get('delivery_date')
+                
+                if status_changed or date_changed:
                     status_changes.append({
                         'name': product['name'],
                         'capacity': product['capacity'],
-                        'link': link,
+                        'link': product['link'],
                         'price': product['price'],
                         'old_status': old_product['stock_status'],
-                        'new_status': product['stock_status']
+                        'new_status': product['stock_status'],
+                        'old_date': old_product.get('delivery_date'),
+                        'new_date': product.get('delivery_date')
                     })
         
         # Пошук видалених товарів
@@ -453,7 +507,7 @@ class NkonMonitor:
         if match:
             grade = match.group(0)
             # Нормалізація: B-Grade -> Grade B
-            if grade[1] == '-': 
+            if len(grade) > 1 and grade[1] == '-': 
                 return f"Grade {grade[0]}"
             # Клас A -> Grade A, Група A -> Grade A
             grade = re.sub(r'(?i)(Клас|Група)', 'Grade', grade)
@@ -502,18 +556,19 @@ class NkonMonitor:
             return "***"
         return f"{text_str[:4]}***{text_str[-4:]}"
 
-    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True) -> Optional[str]:
+    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False) -> Optional[str]:
         """
         Форматування повідомлення для Telegram
         
         Args:
             changes: Словник зі змінами
             include_unchanged: Чи включати блок "Без змін"
+            is_update: Чи є це повідомлення оновленням старого
             
         Returns:
             Текст повідомлення або None, якщо немає чого відправляти
         """
-        msg = "🔋 *NKON LiFePO4 Monitor*\n\n"
+        msg = f"🔋 *NKON LiFePO4 Monitor*\n\n"
         
         has_changes = False
         threshold = self.config.get('price_alert_threshold', 5)
@@ -529,10 +584,14 @@ class NkonMonitor:
             if grade == "?": grade_msg = ""
             else: grade_msg = f"{grade_emoji} {grade} | "
             
-            # Статус (Pre-order/In Stock)
+            # Статус (Pre-order/In Stock) + Дата доставки
             status_ico = ""
+            delivery_msg = ""
+            
             if item.get('stock_status') == 'preorder':
                 status_ico = " 📦Pre"
+                if item.get('delivery_date'):
+                    delivery_msg = f"\n  └ 📅 {item['delivery_date']}"
             elif item.get('stock_status') == 'in_stock':
                 status_ico = " ✅In"
             elif item.get('stock_status') == 'out_of_stock':
@@ -540,7 +599,7 @@ class NkonMonitor:
                 
             link_text = f"[{item['capacity']}Ah]({item['link']})"
             
-            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} | {price}{status_ico}"
+            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} | {price}{status_ico}{delivery_msg}"
 
         # Нові товари
         if changes.get('new'):
@@ -575,16 +634,17 @@ class NkonMonitor:
                         pass
                 
                 grade = self._extract_grade(item['name'])
-                grade_emoji = "🅰️" if "Grade A" in grade else "🅱️"
+                grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
+                grade_msg = f"{grade_emoji} {grade} | " if grade != "?" else ""
                 short_name = self._shorten_name(item['name'])
                 
-                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_emoji} {short_name} | {change_str}\n"
+                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name} | {change_str}\n"
             msg += "\n"
         
-        # Зміни статусу
+        # Зміни статусу або дати
         if changes.get('status_changes'):
             has_changes = True
-            msg += f"📦 *Зміни статусу ({len(changes['status_changes'])}):*\n"
+            msg += f"📦 *Зміни статусу({len(changes['status_changes'])}):*\n"
             for item in changes['status_changes']:
                 new_status = item.get('new_status')
                 old_status = item.get('old_status')
@@ -594,11 +654,27 @@ class NkonMonitor:
                 old_str = "Pre" if old_status == 'preorder' else "In"
                 new_str = "Pre" if new_status == 'preorder' else "In"
                 
+                if old_status != new_status:
+                    status_info = f" | {old_str} → {new_str}"
+                else:
+                    status_info = "" # Статус не змінився, значить змінилася тільки дата
+                
+                # Показ дати
+                date_msg = ""
+                old_date = item.get('old_date')
+                new_date = item.get('new_date')
+                if new_date:
+                    if old_date and old_date != new_date:
+                        date_msg = f"\n  └ 📅 {old_date} → {new_date}"
+                    else:
+                        date_msg = f"\n  └ 📅 {new_date}"
+                
                 grade_raw = self._extract_grade(item['name'])
-                grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️"
+                grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️" if "Grade B" in grade_raw else "❓"
+                grade_msg = f"{grade_ico} {grade_raw} | " if grade_raw != "?" else ""
                 short_name = self._shorten_name(item['name'])
                 
-                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_ico} {short_name} | {old_str} → {new_str} | {price}\n"
+                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name}{status_info}{date_msg} | {price}\n"
             msg += "\n"
         
         # Видалені товари
@@ -608,13 +684,8 @@ class NkonMonitor:
             for item in changes['removed']:
                 msg += f"• [{item['capacity']}Ah] {self._shorten_name(item['name'])}\n"
             msg += "\n"
-        
-            msg += "\n"
             
         # Якщо змін немає, чи показувати повний список?
-        # Логіка: Якщо це перший запуск (new > 0) -> показуємо все як new.
-        # Якщо немає активних змін (new/removed/price/status) і include_unchanged=False -> повертаємо None
-        
         if not has_changes and not include_unchanged:
             return None
         
@@ -632,11 +703,13 @@ class NkonMonitor:
             if unchanged:
                 msg += f"📋 *Без змін ({len(unchanged)}):*\n"
                 for item in unchanged:
-                    status_emoji = "✅ " if item.get('stock_status') == 'in_stock' else "" 
-                    msg += format_line(item, "•", show_status=True) + "\n"
+                    msg += format_line(item, "•") + "\n"
         
-        msg += f"\n🕒 _{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}_"
-        return msg    
+        # Видаляємо всі зайві пробіли/переноси в кінці та додаємо час одним пустим рядком
+        msg = msg.strip()
+        status_emoji = "🆕" if not is_update else "🔄"
+        msg += f"\n\n{status_emoji} {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+        return msg
 
     
     def edit_telegram_message(self, chat_id: str, message_id: int, text: str) -> bool:
@@ -736,13 +809,28 @@ class NkonMonitor:
         logger.info("Запуск моніторингу NKON LiFePO4")
         logger.info("=" * 60)
         
+        driver = None
         try:
+            # Ініціалізація драйвера
+            driver = self._init_driver()
+            
             # Завантаження сторінки
             url = self.config.get('url', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
-            html = self.fetch_page_with_selenium(url)
+            html = self.fetch_page_with_selenium(url, driver=driver)
             
             # Парсинг товарів
             products = self.parse_products(html)
+            
+            # Додатково: отримання дат доставки для preorder товарів
+            if self.config.get('fetch_delivery_dates', True):
+                preorder_items = [p for p in products if p['stock_status'] == 'preorder']
+                if preorder_items:
+                    logger.info(f"Збір дат доставки для {len(preorder_items)} товарів...")
+                    for p in preorder_items:
+                        date = self._fetch_delivery_date_details(p['link'], driver=driver)
+                        if date:
+                            p['delivery_date'] = date
+                            logger.info(f"Знайдено дату для {p['name']}: {date}")
             
             if not products:
                 logger.warning("Не знайдено товарів, що відповідають критеріям")
@@ -757,29 +845,30 @@ class NkonMonitor:
             
             # Форматування та відправка повідомлення
             # 1. Обробка FULL отримувачів (Повні звіти або Редагування старого)
-            msg_full = self.format_telegram_message(changes, include_unchanged=True)
             recipients_full = self.config.get('recipients_full', set())
+            recipients_changes = self.config.get('recipients_changes', set())
             
-            # Для FULL отримувачів - завжди НОВЕ повідомлення (з push-сповіщенням)
-            # Це головна різниця від Changes Only
-            last_messages = self.last_messages
-            new_last_messages = last_messages.copy()
+            # Фільтруємо старі повідомлення: залишаємо тільки ті, що є в поточному конфігурі
+            # Це запобігає спробам відправки на старі ID, яких більше немає в налаштуваннях
+            new_last_messages = {str(cid): self.last_messages[str(cid)] for cid in recipients_full if str(cid) in self.last_messages}
             
-            if recipients_full and msg_full:
-                logger.info(f"Відправка повного звіту {len(recipients_full)} отримувачам...")
-                sent = self.send_telegram_message(msg_full, chat_ids=recipients_full, dry_run=dry_run)
-                # Оновлюємо ID повідомлень (для можливого майбутнього використання)
-                for cid, mid in sent.items():
-                    new_last_messages[str(cid)] = mid
+            if recipients_full:
+                msg_full = self.format_telegram_message(changes, include_unchanged=True, is_update=False)
+                if msg_full:
+                    logger.info(f"Відправка повного звіту {len(recipients_full)} отримувачам...")
+                    sent = self.send_telegram_message(msg_full, chat_ids=recipients_full, dry_run=dry_run)
+                    # Оновлюємо ID повідомлень
+                    for cid, mid in sent.items():
+                        new_last_messages[str(cid)] = mid
 
             # 2. Обробка CHANGES ONLY (Окрема логіка для каналу)
             # Логіка: Якщо є зміни - завжди НОВЕ повідомлення (залишається в історії).
             #         Якщо немає змін - редагуємо одне повідомлення "Без змін".
-            msg_changes = self.format_telegram_message(changes, include_unchanged=False)
-            recipients_changes = self.config.get('recipients_changes', set())
+            msg_changes = self.format_telegram_message(changes, include_unchanged=False, is_update=False)
             
-            # Окремий трекер для "без змін" повідомлень
-            no_changes_messages = self.last_messages.get('_no_changes', {})
+            # Окремий трекер для "без змін" повідомлень. Фільтруємо аналогично.
+            old_no_changes = self.last_messages.get('_no_changes', {})
+            no_changes_messages = {str(cid): old_no_changes[str(cid)] for cid in recipients_changes if str(cid) in old_no_changes}
             
             if recipients_changes:
                 if msg_changes:
@@ -803,15 +892,18 @@ class NkonMonitor:
                         
                         if last_nc_msg_id and not dry_run:
                             # Пробуємо редагувати
-                            success = self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text)
+                            no_changes_text_update = self.format_telegram_message(changes, include_unchanged=True, is_update=True)
+                            success = self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text_update)
                             if not success:
                                 # Не вдалось - шлемо нове
-                                sent = self.send_telegram_message(no_changes_text, chat_ids={chat_id}, dry_run=dry_run)
+                                no_changes_text_new = self.format_telegram_message(changes, include_unchanged=True, is_update=False)
+                                sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run)
                                 if sent.get(chat_id):
                                     no_changes_messages[str(chat_id)] = sent[chat_id]
                         else:
                             # Нема попереднього - шлемо нове
-                            sent = self.send_telegram_message(no_changes_text, chat_ids={chat_id}, dry_run=dry_run)
+                            no_changes_text_new = self.format_telegram_message(changes, include_unchanged=True, is_update=False)
+                            sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run)
                             if sent.get(chat_id):
                                 no_changes_messages[str(chat_id)] = sent[chat_id]
                     
@@ -835,21 +927,19 @@ class NkonMonitor:
             }
             
             self._save_state(state_to_save)
-            logger.info(f"State збережено: {len(current_state)} товарів")
             
             logger.info("=" * 60)
             logger.info("Моніторинг завершено успішно")
             logger.info("=" * 60)
-            
+
         except Exception as e:
-            error_msg = f"❌ *КРИТИЧНА ПОМИЛКА МНІТОРИНГУ*\n\n"
+            error_msg = f"❌ *КРИТИЧНА ПОМИЛКА МОНІТОРИНГУ*\n\n"
             error_msg += f"Тип: `{type(e).__name__}`\n"
             error_msg += f"Помилка: `{str(e)}`\n"
             error_msg += f"Час: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
             logger.error(f"Критична помилка: {e}", exc_info=True)
             
-            # Спроба відправити помилку в Telegram (тільки якщо не dry_run)
             # Спроба відправити помилку в Telegram (тільки адмінам з full списку)
             if not dry_run:
                 try:
@@ -860,6 +950,10 @@ class NkonMonitor:
                     logger.error(f"Не вдалося відправити помилку в Telegram: {send_err}")
             
             raise
+        finally:
+            if driver:
+                logger.info("Закриття Selenium драйвера...")
+                driver.quit()
 
 
 def main():

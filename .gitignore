@@ -3,6 +3,8 @@ config.json
 
 # State файли
 state.json
+state.previous.json
+test*
 
 # Логи
 *.log

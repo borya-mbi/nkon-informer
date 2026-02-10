@@ -6,6 +6,10 @@ from nkon_monitor import NkonMonitor
 class MockMonitor(NkonMonitor):
     def __init__(self):
         self.config = {}
+        self.session = None
+        self.previous_state = {}
+        self.last_messages = {}
+        self.state_file = 'state_test.json'
 
 def run_tests():
     print("Initializing MockMonitor for Unit Testing...")
@@ -49,6 +53,23 @@ def run_tests():
         res = monitor.clean_price(p)
         status = "✅" if res is not None else "❌"
         print(f'{status} "{p}" -> {res}')
+
+    # Test 3: Delivery Date
+    print('\n--- TEST 3: Delivery Date ---')
+    dates = [
+        'Орієнтовна дата доставки:27-03-2026',
+        'Орієнтовна дата доставки: 15-04-2026',
+        'Орієнтовна дата доставки:10-3-2026',
+        '27-03-2026',
+        'Something else 12-12-2025',
+        'No date here'
+    ]
+    
+    for d in dates:
+        match = re.search(r'(\d{1,2}-\d{1,2}-\d{4})', d)
+        res = match.group(1) if match else None
+        status = "✅" if res else "❌"
+        print(f'{status} "{d}" -> {res}')
 
 if __name__ == "__main__":
     run_tests()

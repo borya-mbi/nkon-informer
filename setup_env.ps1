@@ -1,8 +1,19 @@
 # Setup environment variables for NKON Monitor
-# These variables are stored in the Windows Registry for the current User
-# No changes to system files or admin rights required.
+# Choice between Windows Registry (Persistent) or .env file (Immediate/Portable)
 
 Write-Host "--- NKON Monitor Setup ---" -ForegroundColor Cyan
+
+# Helper to read from existing .env if present
+function Get-CurrentFromEnv {
+    param ([string]$Key)
+    if (Test-Path ".env") {
+        $line = Get-Content ".env" | Where-Object { $_ -match "^$Key=" }
+        if ($line) {
+            return $line.Split('=', 2)[1].Trim()
+        }
+    }
+    return ""
+}
 
 function Read-UserVariable {
     param (
@@ -12,7 +23,12 @@ function Read-UserVariable {
         [string]$DefaultValue = ""
     )
     
-    $current = [System.Environment]::GetEnvironmentVariable($Name, 'User')
+    # Try .env first, then Registry
+    $current = Get-CurrentFromEnv -Key $Name
+    if ([string]::IsNullOrWhiteSpace($current)) {
+        $current = [System.Environment]::GetEnvironmentVariable($Name, 'User')
+    }
+
     $prompt = "$PromptText"
     
     if (-not [string]::IsNullOrWhiteSpace($current)) {
@@ -35,12 +51,8 @@ function Read-UserVariable {
     $inputVal = Read-Host $prompt
     
     if ([string]::IsNullOrWhiteSpace($inputVal)) {
-        if (-not [string]::IsNullOrWhiteSpace($current)) {
-            return $current
-        }
-        if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
-            return $DefaultValue
-        }
+        if (-not [string]::IsNullOrWhiteSpace($current)) { return $current }
+        if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) { return $DefaultValue }
     }
     else {
         return $inputVal
@@ -53,10 +65,15 @@ function Read-UserVariable {
     return ""
 }
 
+Write-Host "`nStep 1: Choose storage method" -ForegroundColor Yellow
+Write-Host "1) Windows Registry (Requires VS Code restart to apply changes)"
+Write-Host "2) .env file (Applies changes immediately, recommended for testing)"
+$storageChoice = Read-Host "Your choice (1 or 2, default is 2)"
+if ([string]::IsNullOrWhiteSpace($storageChoice)) { $storageChoice = "2" }
+
 $token = Read-UserVariable -Name "TELEGRAM_BOT_TOKEN" -PromptText "Enter TELEGRAM_BOT_TOKEN" -Required $true
 
-# Legacy cleanup (Removing legacy variable prompts, only granular)
-Write-Host "Configuration for Notifications:" -ForegroundColor Yellow
+Write-Host "`nStep 2: Configuration for Notifications" -ForegroundColor Yellow
 $chat_ids_full = Read-UserVariable -Name "TELEGRAM_CHAT_IDS_FULL" -PromptText "Enter Chat IDs for FULL Reports (comma separated)"
 $chat_ids_changes = Read-UserVariable -Name "TELEGRAM_CHAT_IDS_CHANGES_ONLY" -PromptText "Enter Chat IDs for CHANGES ONLY (comma separated)"
 
@@ -65,39 +82,61 @@ if (-not [string]::IsNullOrWhiteSpace($chat_ids_full) -and -not [string]::IsNull
     $full_list = $chat_ids_full -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     $changes_list = $chat_ids_changes -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     
-    # Filter full list
     $new_full_list = @()
     foreach ($id in $full_list) {
-        if ($changes_list -notcontains $id) {
-            $new_full_list += $id
-        }
-        else {
-            Write-Host "Notice: ID $id removed from FULL list because it is in CHANGES ONLY list." -ForegroundColor Gray
-        }
+        if ($changes_list -notcontains $id) { $new_full_list += $id }
     }
-    
     $chat_ids_full = $new_full_list -join ','
 }
 
 $min_cap = Read-UserVariable -Name "MIN_CAPACITY_AH" -PromptText "Enter MIN_CAPACITY_AH" -DefaultValue "200"
 $threshold = Read-UserVariable -Name "PRICE_ALERT_THRESHOLD" -PromptText "Enter PRICE_ALERT_THRESHOLD" -DefaultValue "5"
+$fetch_dates = Read-UserVariable -Name "FETCH_DELIVERY_DATES" -PromptText "Fetch Delivery Dates for Pre-orders? (true/false)" -DefaultValue "true"
+$fetch_delay = Read-UserVariable -Name "DETAIL_FETCH_DELAY" -PromptText "Delay between detail requests (seconds)" -DefaultValue "2"
 
-# Set Environment Variables (User Scope - Persistent)
-[System.Environment]::SetEnvironmentVariable('TELEGRAM_BOT_TOKEN', $token, 'User')
-[System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS', $null, 'User') 
-[System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS_FULL', $chat_ids_full, 'User')
-[System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS_CHANGES_ONLY', $chat_ids_changes, 'User')
-[System.Environment]::SetEnvironmentVariable('MIN_CAPACITY_AH', $min_cap, 'User')
-[System.Environment]::SetEnvironmentVariable('PRICE_ALERT_THRESHOLD', $threshold, 'User')
+if ($storageChoice -eq "1") {
+    # --- Option 1: Registry ---
+    [System.Environment]::SetEnvironmentVariable('TELEGRAM_BOT_TOKEN', $token, 'User')
+    [System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS', $null, 'User') 
+    [System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS_FULL', $chat_ids_full, 'User')
+    [System.Environment]::SetEnvironmentVariable('TELEGRAM_CHAT_IDS_CHANGES_ONLY', $chat_ids_changes, 'User')
+    [System.Environment]::SetEnvironmentVariable('MIN_CAPACITY_AH', $min_cap, 'User')
+    [System.Environment]::SetEnvironmentVariable('PRICE_ALERT_THRESHOLD', $threshold, 'User')
+    [System.Environment]::SetEnvironmentVariable('FETCH_DELIVERY_DATES', $fetch_dates, 'User')
+    [System.Environment]::SetEnvironmentVariable('DETAIL_FETCH_DELAY', $fetch_delay, 'User')
 
-# Set Environment Variables (Process Scope - Immediate for current session)
+    Write-Host "`n[SUCCESS] Saved to Windows Registry!" -ForegroundColor Green
+    Write-Host "IMPORTANT: Please restart VS Code to apply these changes." -ForegroundColor Yellow
+}
+else {
+    # --- Option 2: .env ---
+    $envContent = @"
+# Telegram Configuration
+TELEGRAM_BOT_TOKEN=$token
+TELEGRAM_CHAT_IDS_FULL=$chat_ids_full
+TELEGRAM_CHAT_IDS_CHANGES_ONLY=$chat_ids_changes
+
+# Thresholds
+MIN_CAPACITY_AH=$min_cap
+PRICE_ALERT_THRESHOLD=$threshold
+
+# Delivery Date Settings
+FETCH_DELIVERY_DATES=$fetch_dates
+DETAIL_FETCH_DELAY=$fetch_delay
+
+# Monitor URL
+NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html
+"@
+    $envContent | Out-File -FilePath ".env" -Encoding utf8
+    Write-Host "`n[SUCCESS] Saved to .env file!" -ForegroundColor Green
+    Write-Host "Changes will be applied immediately." -ForegroundColor Gray
+}
+
+# Always set process scope for immediate use in the same shell
 $env:TELEGRAM_BOT_TOKEN = $token
-$env:TELEGRAM_CHAT_IDS = $null
 $env:TELEGRAM_CHAT_IDS_FULL = $chat_ids_full
 $env:TELEGRAM_CHAT_IDS_CHANGES_ONLY = $chat_ids_changes
 $env:MIN_CAPACITY_AH = $min_cap
 $env:PRICE_ALERT_THRESHOLD = $threshold
-
-Write-Host "`n[SUCCESS] Environment variables saved!" -ForegroundColor Green
-Write-Host "IMPORTANT: Please restart your terminal or VS Code for changes to take effect." -ForegroundColor Yellow
-Write-Host "Legacy TELEGRAM_CHAT_IDS has been cleared." -ForegroundColor Gray
+$env:FETCH_DELIVERY_DATES = $fetch_dates
+$env:DETAIL_FETCH_DELAY = $fetch_delay

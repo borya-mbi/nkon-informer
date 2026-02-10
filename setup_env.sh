@@ -129,6 +129,8 @@ fi
 # 4. Settings
 min_cap=$(ask_variable "MIN_CAPACITY_AH" "Enter MIN_CAPACITY_AH" "false" "200")
 threshold=$(ask_variable "PRICE_ALERT_THRESHOLD" "Enter PRICE_ALERT_THRESHOLD" "false" "5")
+fetch_dates=$(ask_variable "FETCH_DELIVERY_DATES" "Fetch Delivery Dates for Pre-orders? (true/false)" "false" "true")
+fetch_delay=$(ask_variable "DETAIL_FETCH_DELAY" "Delay between detail requests (seconds)" "false" "2")
 
 # Generate .env content
 temp_env=$(mktemp)
@@ -148,11 +150,12 @@ TELEGRAM_CHAT_IDS_CHANGES_ONLY=$chat_ids_changes
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
 
+# Delivery Date Settings
+FETCH_DELIVERY_DATES=$fetch_dates
+DETAIL_FETCH_DELAY=$fetch_delay
+
 # Monitor URL
 NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html
-
-# Legacy cleared
-TELEGRAM_CHAT_IDS=
 EOL
 
 # Move temp file to .env
@@ -163,4 +166,3 @@ chmod 600 .env
 
 echo ""
 echo -e "${GREEN}[SUCCESS] Configuration saved to .env file!${NC}"
-echo -e "Legacy TELEGRAM_CHAT_IDS has been cleared."
