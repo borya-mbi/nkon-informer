@@ -591,7 +591,7 @@ class NkonMonitor:
             if item.get('stock_status') == 'preorder':
                 status_ico = f" [📦Pre]({item['link']})"
                 if item.get('delivery_date'):
-                    delivery_msg = f"\n  └─► [{item['delivery_date']}]({item['link']})"
+                    delivery_msg = f"\n  [└─► {item['delivery_date']}]({item['link']})"
             elif item.get('stock_status') == 'in_stock':
                 status_ico = f" [✅In]({item['link']})"
             elif item.get('stock_status') == 'out_of_stock':
