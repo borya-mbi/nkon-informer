@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 class NkonMonitor:
     """Клас для моніторингу батарей LiFePO4 на сайті NKON"""
     
+    # Константи для оформлення Telegram повідомлень
+    LINE_PREFIX = "└──▷"  # Префікс для вкладених ліній. Варіанти: "└─►", "╰─►", "└─▷", "╰─▷", "└──▷", "╰──▷"
+    
     def __init__(self, config_path: str = 'config.json'):
         """
         Ініціалізація монітора
@@ -512,8 +515,6 @@ class NkonMonitor:
             # Клас A -> Grade A, Група A -> Grade A
             grade = re.sub(r'(?i)(Клас|Група)', 'Grade', grade)
             grade = grade.title()  # grade a -> Grade A
-            # Покращене відображення мінуса: A- -> A➖
-            grade = grade.replace('-', '➖')
             return grade
         return "?"
 
@@ -573,16 +574,26 @@ class NkonMonitor:
         has_changes = False
         threshold = self.config.get('price_alert_threshold', 5)
         
+        def get_grade_display(grade_str: str) -> str:
+            """Формує рядок грейду з відповідним емодзі та іконкою мінуса"""
+            if grade_str == "?":
+                return ""
+            
+            # Вибір основної іконки
+            emoji = "🅰️" if "Grade A" in grade_str else "🅱️" if "Grade B" in grade_str else "❓"
+            
+            # Додаємо іконку мінуса, якщо він є в грейді
+            if "-" in grade_str:
+                emoji += "➖"
+                
+            return f"{emoji} {grade_str} | "
+
         def format_line(item, prefix_emoji="", show_status=False):
             """Helper для форматування одного рядка товару"""
             grade = self._extract_grade(item['name'])
             short_name = self._shorten_name(item['name'])
             price = item.get('price', 'N/A')
-            
-            # Емодзі грейду
-            grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
-            if grade == "?": grade_msg = ""
-            else: grade_msg = f"{grade_emoji} {grade} | "
+            grade_msg = get_grade_display(grade)
             
             # Статус (Pre-order/In Stock) + Дата доставки
             status_ico = ""
@@ -591,7 +602,7 @@ class NkonMonitor:
             if item.get('stock_status') == 'preorder':
                 status_ico = f" [📦Pre]({item['link']})"
                 if item.get('delivery_date'):
-                    delivery_msg = f"\n  [└─► {item['delivery_date']}]({item['link']})"
+                    delivery_msg = f"\n  [{self.LINE_PREFIX} {item['delivery_date']}]({item['link']})"
             elif item.get('stock_status') == 'in_stock':
                 status_ico = f" [✅In]({item['link']})"
             elif item.get('stock_status') == 'out_of_stock':
@@ -634,8 +645,7 @@ class NkonMonitor:
                         pass
                 
                 grade = self._extract_grade(item['name'])
-                grade_emoji = "🅰️" if "Grade A" in grade else "🅱️" if "Grade B" in grade else "❓"
-                grade_msg = f"{grade_emoji} {grade} | " if grade != "?" else ""
+                grade_msg = get_grade_display(grade)
                 short_name = self._shorten_name(item['name'])
                 
                 msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name} | {change_str}\n"
@@ -665,13 +675,12 @@ class NkonMonitor:
                 new_date = item.get('new_date')
                 if new_date:
                     if old_date and old_date != new_date:
-                        date_msg = f"\n  └─► {old_date} → {new_date}"
+                        date_msg = f"\n  {self.LINE_PREFIX} {old_date} → {new_date}"
                     else:
-                        date_msg = f"\n  └─► {new_date}"
+                        date_msg = f"\n  {self.LINE_PREFIX} {new_date}"
                 
                 grade_raw = self._extract_grade(item['name'])
-                grade_ico = "🅰️" if "Grade A" in grade_raw else "🅱️" if "Grade B" in grade_raw else "❓"
-                grade_msg = f"{grade_ico} {grade_raw} | " if grade_raw != "?" else ""
+                grade_msg = get_grade_display(grade_raw)
                 short_name = self._shorten_name(item['name'])
                 
                 msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name}{status_info}{date_msg} | {price}\n"
