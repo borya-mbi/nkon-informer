@@ -11,12 +11,18 @@ YELLOW='\033[1;33m'
 GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
-# Function to read existing value from .env
+# Function to read existing value (check .env first, then system environment)
 get_current_value() {
     local key=$1
     if [ -f ".env" ]; then
-        grep "^${key}=" .env | cut -d '=' -f2- | tr -d '\r'
+        local value=$(grep "^${key}=" .env | cut -d '=' -f2- | tr -d '\r')
+        if [ -n "$value" ]; then
+            echo "$value"
+            return
+        fi
     fi
+    # Check system environment
+    printenv "$key"
 }
 
 # Function to ask for variable with "Keep Existing" logic
@@ -69,10 +75,22 @@ ask_variable() {
     echo "" >&2
 }
 
-echo -e "${CYAN}--- NKON Monitor Setup (Linux .env) ---${NC}"
+echo -e "${CYAN}--- NKON Monitor Setup (Linux) ---${NC}"
 
-if [ -f ".env" ]; then
-    echo -e "${YELLOW}Found existing .env file. Press Enter to keep current values.${NC}"
+# Step 0: Choose storage method
+echo -e "\n${YELLOW}Step 0: Choose storage method${NC}" >&2
+echo "1) System (~/.bashrc) - Persistent across sessions" >&2
+echo "2) .env file - Immediate and local to this folder (Recommended for testing)" >&2
+read -p "Your choice (1 or 2, default is 2): " storage_choice >&2
+
+if [ -z "$storage_choice" ]; then storage_choice="2"; fi
+
+if [ "$storage_choice" = "1" ]; then
+    echo -e "${YELLOW}Saving to ~/.bashrc. You may need to restart your shell later.${NC}" >&2
+else
+    if [ -f ".env" ]; then
+        echo -e "${YELLOW}Found existing .env file. Press Enter to keep current values.${NC}" >&2
+    fi
 fi
 
 # 1. Telegram Token (Required)
@@ -132,11 +150,8 @@ threshold=$(ask_variable "PRICE_ALERT_THRESHOLD" "Enter PRICE_ALERT_THRESHOLD" "
 fetch_dates=$(ask_variable "FETCH_DELIVERY_DATES" "Fetch Delivery Dates for Pre-orders? (true/false)" "false" "true")
 fetch_delay=$(ask_variable "DETAIL_FETCH_DELAY" "Delay between detail requests (seconds)" "false" "2")
 
-# Generate .env content
-temp_env=$(mktemp)
-
-cat > "$temp_env" <<EOL
-# Telegram Configuration
+# Generate content
+env_content="# Telegram Configuration
 TELEGRAM_BOT_TOKEN=$token
 
 # Notification Groups (Comma separated IDs)
@@ -155,14 +170,45 @@ FETCH_DELIVERY_DATES=$fetch_dates
 DETAIL_FETCH_DELAY=$fetch_delay
 
 # Monitor URL
-NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html
-EOL
+NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html"
 
-# Move temp file to .env
-mv "$temp_env" .env
+if [ "$storage_choice" = "1" ]; then
+    # --- Option 1: ~/.bashrc ---
+    BASHRC="$HOME/.bashrc"
+    MARKER_START="# >>> NKON Monitor Config START >>>"
+    MARKER_END="# <<< NKON Monitor Config END <<<"
 
-# Set secure permissions
-chmod 600 .env
+    # Create a temporary file for the new bashrc content
+    temp_bashrc=$(mktemp)
+    
+    # Remove existing block if present
+    if grep -q "$MARKER_START" "$BASHRC" 2>/dev/null; then
+        sed "/$MARKER_START/,/$MARKER_END/d" "$BASHRC" > "$temp_bashrc"
+    else
+        cat "$BASHRC" > "$temp_bashrc"
+    fi
+
+    # Append new block
+    echo "$MARKER_START" >> "$temp_bashrc"
+    echo "$env_content" | while read -r line; do
+        if [[ $line == *"="* ]]; then
+            echo "export $line" >> "$temp_bashrc"
+        else
+            echo "$line" >> "$temp_bashrc"
+        fi
+    done
+    echo "$MARKER_END" >> "$temp_bashrc"
+
+    mv "$temp_bashrc" "$BASHRC"
+    echo -e "${GREEN}[SUCCESS] Configuration saved to ~/.bashrc!${NC}"
+    echo -e "${YELLOW}IMPORTANT: Run 'source ~/.bashrc' or restart shell to apply.${NC}"
+else
+    # --- Option 2: .env ---
+    temp_env=$(mktemp)
+    echo "$env_content" > "$temp_env"
+    mv "$temp_env" .env
+    chmod 600 .env
+    echo -e "${GREEN}[SUCCESS] Configuration saved to .env file!${NC}"
+fi
 
 echo ""
-echo -e "${GREEN}[SUCCESS] Configuration saved to .env file!${NC}"
