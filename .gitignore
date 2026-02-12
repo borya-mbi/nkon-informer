@@ -1,7 +1,12 @@
 # Конфіденційні дані
 config.json
 
-# State файли (тимчасово дозволено додати)
+# State файли
+state.json
+state.previous.json
+state.json.tmp
+"state.previous with CALB.json"
+test*
 
 # Логи
 *.log
