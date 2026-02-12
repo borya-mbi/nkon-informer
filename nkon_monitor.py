@@ -293,9 +293,8 @@ class NkonMonitor:
                                 logger.info(f"  Опція [{idx}]: '{opt.text}' (value='{opt.get_attribute('value')}')")
                             
                             # 1.1 Пошук пріоритетних опцій (із шинами/busbars)
-                            # УВАГА: negative_keywords використовують regex \b (word boundary),
-                            # щоб 'ні' не збігалося всередині 'шиНІ'
-                            priority_keywords = ['busbar', 'шини', 'шин']
+                            # УВАГА: додаємо 'так'/'yes', бо іноді варіанти просто 'Ні' та 'Так'
+                            priority_keywords = ['busbar', 'шини', 'шин', 'так', 'yes']
                             negative_patterns = [r'\bні\b', r'\bбез\b', r'\bno\b', r'\bnone\b', r'не потрібні']
                             
                             target_idx = None
