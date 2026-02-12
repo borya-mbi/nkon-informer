@@ -11,6 +11,7 @@ test*
 # Скрипти та утиліти (локальні)
 fix_encoding.py
 close_issue*.ps1
+HANDOFF.md
 
 # Логи
 *.log
