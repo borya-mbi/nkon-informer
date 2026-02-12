@@ -9,6 +9,7 @@ class MockMonitor(NkonMonitor):
         self.session = None
         self.previous_state = {}
         self.last_messages = {}
+        self.stock_baselines = {}
         self.state_file = 'state_test.json'
 
 def run_tests():

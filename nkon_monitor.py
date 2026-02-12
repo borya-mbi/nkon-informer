@@ -63,18 +63,21 @@ class NkonMonitor:
         self.state_file = 'state.json'
         self.previous_state = {}
         self.last_messages = {}
+        self.stock_baselines = {}
         
         # Завантаження стану
         loaded_state = self._load_state()
         
         # Обробка версій State
-        if loaded_state.get('version') == 2:
+        if (loaded_state.get('version') or 0) >= 2:
             self.previous_state = loaded_state.get('products', {})
             self.last_messages = loaded_state.get('last_messages', {})
+            self.stock_baselines = loaded_state.get('stock_baselines', {})
         else:
             # Legacy state (just products)
             self.previous_state = loaded_state
             self.last_messages = {}
+            self.stock_baselines = {}
             
         self.session = requests.Session()  # Для anti-ban (Telegram API)
 
@@ -377,10 +380,14 @@ class NkonMonitor:
                 return None
             
             # 5. Парсинг тексту помилки
+            # ВАЖЛИВО: беремо ОСТАННІЙ елемент помилки, бо на сторінці можуть 
+            # залишатись повідомлення від попередніх товарів (Magento кешує)
             soup = BeautifulSoup(driver.page_source, 'html.parser')
-            error_elem = soup.select_one(error_selector)
+            error_elems = soup.select(error_selector)
+            error_elem = error_elems[-1] if error_elems else None
             if error_elem:
                 text = error_elem.get_text(strip=True)
+                logger.info(f"Знайдено {len(error_elems)} помилок на сторінці, беремо останню: '{text[:80]}...'")
                 # "The most you can purchase is 10928" або "only 10928 left"
                 # Додаємо підтримку різних форматів повідомлень NKON
                 patterns = [
@@ -755,11 +762,17 @@ class NkonMonitor:
             if item.get('real_stock') is not None:
                 current_stock = item['real_stock']
                 key = f"{item['link']}_{item.get('capacity', '0')}"
-                old_product = self.previous_state.get(key, {})
-                old_stock = old_product.get('real_stock')
                 
-                if old_stock is not None and old_stock != current_stock:
-                    diff = current_stock - old_stock
+                # Кумулятивне відстеження: порівнюємо з базовим значенням
+                baseline_stock = self.stock_baselines.get(key)
+                
+                # Якщо базового значення немає - ініціалізуємо його поточним
+                if baseline_stock is None:
+                    self.stock_baselines[key] = current_stock
+                    baseline_stock = current_stock
+                
+                if baseline_stock != current_stock:
+                    diff = current_stock - baseline_stock
                     sign = "+" if diff > 0 else ""
                     stock_msg = f" `[{current_stock}({sign}{diff}) шт]`"
                 else:
@@ -1082,6 +1095,11 @@ class NkonMonitor:
                     self.send_telegram_message(msg_changes, chat_ids=recipients_changes, dry_run=dry_run)
                     # Очищаємо ID "без змін" повідомлень, бо наступний "без змін" буде новим
                     no_changes_messages = {}
+                    # СКИДАННЯ BASELINE: при новому повідомленні встановлюємо новий відлік
+                    self.stock_baselines = {
+                        f"{p['link']}_{p.get('capacity', '0')}": p['real_stock']
+                        for p in products if p.get('real_stock') is not None
+                    }
                 else:
                     # Немає змін - редагуємо або створюємо "Без змін" з повним списком товарів
                     # Використовуємо format_telegram_message з include_unchanged=True
@@ -1128,6 +1146,7 @@ class NkonMonitor:
             state_to_save = {
                 'products': current_state,
                 'last_messages': new_last_messages,
+                'stock_baselines': self.stock_baselines,
                 'version': 2
             }
             
