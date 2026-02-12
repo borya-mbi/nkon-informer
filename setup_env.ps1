@@ -92,6 +92,7 @@ if (-not [string]::IsNullOrWhiteSpace($chat_ids_full) -and -not [string]::IsNull
 $min_cap = Read-UserVariable -Name "MIN_CAPACITY_AH" -PromptText "Enter MIN_CAPACITY_AH" -DefaultValue "200"
 $threshold = Read-UserVariable -Name "PRICE_ALERT_THRESHOLD" -PromptText "Enter PRICE_ALERT_THRESHOLD" -DefaultValue "5"
 $fetch_dates = Read-UserVariable -Name "FETCH_DELIVERY_DATES" -PromptText "Fetch Delivery Dates for Pre-orders? (true/false)" -DefaultValue "true"
+$fetch_stock = Read-UserVariable -Name "FETCH_REAL_STOCK" -PromptText "Probe Real Stock Quantity? (true/false)" -DefaultValue "true"
 $fetch_delay = Read-UserVariable -Name "DETAIL_FETCH_DELAY" -PromptText "Delay between detail requests (seconds)" -DefaultValue "2"
 
 if ($storageChoice -eq "1") {
@@ -103,6 +104,7 @@ if ($storageChoice -eq "1") {
     [System.Environment]::SetEnvironmentVariable('MIN_CAPACITY_AH', $min_cap, 'User')
     [System.Environment]::SetEnvironmentVariable('PRICE_ALERT_THRESHOLD', $threshold, 'User')
     [System.Environment]::SetEnvironmentVariable('FETCH_DELIVERY_DATES', $fetch_dates, 'User')
+    [System.Environment]::SetEnvironmentVariable('FETCH_REAL_STOCK', $fetch_stock, 'User')
     [System.Environment]::SetEnvironmentVariable('DETAIL_FETCH_DELAY', $fetch_delay, 'User')
 
     Write-Host "`n[SUCCESS] Saved to Windows Registry!" -ForegroundColor Green
@@ -120,8 +122,9 @@ TELEGRAM_CHAT_IDS_CHANGES_ONLY=$chat_ids_changes
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
 
-# Delivery Date Settings
+# Delivery Date & Stock Settings
 FETCH_DELIVERY_DATES=$fetch_dates
+FETCH_REAL_STOCK=$fetch_stock
 DETAIL_FETCH_DELAY=$fetch_delay
 
 # Monitor URL
@@ -139,4 +142,5 @@ $env:TELEGRAM_CHAT_IDS_CHANGES_ONLY = $chat_ids_changes
 $env:MIN_CAPACITY_AH = $min_cap
 $env:PRICE_ALERT_THRESHOLD = $threshold
 $env:FETCH_DELIVERY_DATES = $fetch_dates
+$env:FETCH_REAL_STOCK = $fetch_stock
 $env:DETAIL_FETCH_DELAY = $fetch_delay

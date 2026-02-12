@@ -115,6 +115,7 @@ class NkonMonitor:
             config['price_alert_threshold'] = int(os.getenv('PRICE_ALERT_THRESHOLD', 5))
             config['url'] = os.getenv('NKON_URL', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
             config['fetch_delivery_dates'] = os.getenv('FETCH_DELIVERY_DATES', 'true').lower() == 'true'
+            config['fetch_real_stock'] = os.getenv('FETCH_REAL_STOCK', 'true').lower() == 'true'
             config['detail_fetch_delay'] = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
             return config
         
@@ -138,7 +139,8 @@ class NkonMonitor:
                     config['recipients_changes'] = json_changes
                     
                     config['fetch_delivery_dates'] = file_config.get('fetch_delivery_dates', True)
-                    config['detail_fetch_delay'] = float(file_config.get('detail_fetch_delay', 2.0))
+                    config['fetch_real_stock'] = file_config.get('fetch_real_stock', True)
+                    config['detail_fetch_delay'] = float(file_config.get('detail_fetch_delay', float(2.0)))
                     
                     logger.info("✅ Конфігурацію завантажено з config.json")
             except FileNotFoundError:
@@ -242,6 +244,7 @@ class NkonMonitor:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "ampreorder-observed"))
                 )
+                time.sleep(0.3)  # Невелика пауза для стабілізації тексту
             except:
                 logger.warning(f"Елемент .ampreorder-observed не з'явився на {url}")
             
@@ -256,6 +259,151 @@ class NkonMonitor:
             return None
         except Exception as e:
             logger.warning(f"Не вдалося отримати дату доставки для {url}: {e}")
+            return None
+    
+    def _fetch_real_stock(self, url: str, driver) -> Optional[int]:
+        """
+        Отримання реальної кількості на складі через Selenium 
+        (шляхом введення 30000 в поле кількості)
+        """
+        logger.info(f"Отримання реального залишку (Selenium): {url}")
+        
+        try:
+            # Ми вже на сторінці якщо викликано після _fetch_delivery_date_details, 
+            # але для надійності перевіримо URL або просто завантажимо
+            if driver.current_url != url:
+                driver.get(url)
+                
+            # 1. Обробка обов'язкових випадаючих списків (dropdowns)
+            # Деякі товари (наприклад, Eve MB31) вимагають вибору опцій (Busbars)
+            try:
+                # Шукаємо всі видимі select-елементи, які можуть бути обов'язковими
+                selects = driver.find_elements(By.CSS_SELECTOR, "select.super-attribute-select, select.required-entry, select[id^='select_']")
+                for selector in selects:
+                    if selector.is_displayed():
+                        from selenium.webdriver.support.ui import Select
+                        s = Select(selector)
+                        # Перевіряємо, чи вже вибрано щось (окрім дефолтного "Choose an Option")
+                        if not s.first_selected_option or s.first_selected_option.get_attribute('value') == "":
+                            # Логуємо всі доступні опції для діагностики
+                            for idx, opt in enumerate(s.options):
+                                logger.info(f"  Опція [{idx}]: '{opt.text}' (value='{opt.get_attribute('value')}')")
+                            
+                            # 1.1 Пошук пріоритетних опцій (із шинами/busbars)
+                            # УВАГА: negative_keywords використовують regex \b (word boundary),
+                            # щоб 'ні' не збігалося всередині 'шиНІ'
+                            priority_keywords = ['busbar', 'шини', 'шин']
+                            negative_patterns = [r'\bні\b', r'\bбез\b', r'\bno\b', r'\bnone\b', r'не потрібні']
+                            
+                            target_idx = None
+                            
+                            # Спроба знайти найкращий варіант (із шинами)
+                            for i in range(1, len(s.options)):
+                                opt_text = s.options[i].text.lower()
+                                val = s.options[i].get_attribute('value')
+                                if not val: continue
+                                
+                                # Якщо містить ключові слова І НЕ містить заперечень
+                                if any(kw in opt_text for kw in priority_keywords):
+                                    if not any(re.search(pat, opt_text) for pat in negative_patterns):
+                                        logger.info(f"Знайдено пріоритетну опцію: {s.options[i].text}")
+                                        target_idx = i
+                                        break
+                            
+                            # Якщо пріоритет не знайдено, просто беремо першу доступну
+                            if target_idx is None:
+                                logger.info("Пріоритетну опцію не знайдено, обираємо першу доступну")
+                                for i in range(1, len(s.options)):
+                                    if s.options[i].get_attribute('value'):
+                                        target_idx = i
+                                        break
+                            
+                            if target_idx is not None:
+                                logger.info(f"Вибір опції: {s.options[target_idx].text}")
+                                s.select_by_index(target_idx)
+                                time.sleep(0.5) # Пауза для оновлення ціни/стану
+
+            except Exception as e:
+                logger.warning(f"Помилка при спробі вибрати опції на {url}: {e}")
+
+            # 2. Очікування та заповнення поля qty
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.NAME, "qty"))
+                )
+            except:
+                logger.warning(f"Поле 'qty' не знайдено на {url}")
+                return None
+            
+            qty_input = driver.find_element(By.NAME, "qty")
+            qty_input.clear()
+            qty_input.send_keys("30000")
+            time.sleep(1) # Пауза, щоб сайт "захопив" нове число
+            
+            # 3. Пошук кнопки Add to Cart / Pre Order
+            button_selectors = ["button.tocart", "button.btn--cart", ".action.primary.tocart"]
+            cart_button = None
+            for selector in button_selectors:
+                try:
+                    btns = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for btn in btns:
+                        if btn.is_displayed() and btn.is_enabled():
+                            cart_button = btn
+                            break
+                    if cart_button:
+                        break
+                except:
+                    continue
+            
+            if not cart_button:
+                logger.warning(f"Не знайдено активну кнопку додавання в кошик на {url}")
+                return None
+                
+            # Клікаємо JS-ом для надійності, якщо звичайний клік перекрито чимось
+            try:
+                cart_button.click()
+            except:
+                driver.execute_script("arguments[0].click();", cart_button)
+            
+            # 4. Очікування повідомлення помилки
+            error_selector = ".message-error, .mage-error, .message.error"
+            try:
+                WebDriverWait(driver, 8).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, error_selector))
+                )
+            except:
+                logger.warning(f"Повідомлення про залишок не з'явилося на {url} (можливо, товар вільний для 30к шт?)")
+                # Перевіримо, чи немає інших помилок (наприклад, "This is a required field")
+                return None
+            
+            # 5. Парсинг тексту помилки
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            error_elem = soup.select_one(error_selector)
+            if error_elem:
+                text = error_elem.get_text(strip=True)
+                # "The most you can purchase is 10928" або "only 10928 left"
+                # Додаємо підтримку різних форматів повідомлень NKON
+                patterns = [
+                    r'only\s+(\d+)\s+left',
+                    r'most\s+you\s+can\s+purchase\s+is\s+(\d+)',
+                    r'максимальна\s+кількість\s+.*?\s+(\d+)',
+                    r'залишилося\s+лише\s+(\d+)'
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        stock_val = int(match.group(1))
+                        logger.info(f"✅ Знайдено реальний залишок: {stock_val}")
+                        return stock_val
+                
+                logger.warning(f"Знайдено помилку, але regex не спрацював. Текст: '{text}' (URL: {url})")
+            else:
+                logger.warning(f"Елемент помилки знайдено Selenium-ом, але BeautifulSoup його не бачить на {url}")
+                
+            return None
+        except Exception as e:
+            logger.error(f"Критична помилка при отриманні залишку для {url}: {e}", exc_info=True)
             return None
     
 
@@ -397,6 +545,7 @@ class NkonMonitor:
             'link': link,
             'stock_status': stock_status,  # 'in_stock' або 'preorder'
             'delivery_date': None,       # Буде заповнено пізніше в run() якщо preorder
+            'real_stock': None,          # Реальний залишок
             'timestamp': datetime.now().isoformat()
         }
     
@@ -601,18 +750,37 @@ class NkonMonitor:
             price = item.get('price', 'N/A')
             grade_msg = get_grade_display(grade)
             
-            # Статус (Pre-order/In Stock) + Дата доставки
+            # 1. Підготовка повідомлення про залишок
+            stock_msg = ""
+            if item.get('real_stock') is not None:
+                current_stock = item['real_stock']
+                key = f"{item['link']}_{item.get('capacity', '0')}"
+                old_product = self.previous_state.get(key, {})
+                old_stock = old_product.get('real_stock')
+                
+                if old_stock is not None and old_stock != current_stock:
+                    diff = current_stock - old_stock
+                    sign = "+" if diff > 0 else ""
+                    stock_msg = f" `[{current_stock}({sign}{diff}) шт]`"
+                else:
+                    stock_msg = f" `[{current_stock} шт]`"
+            
+            # 2. Статус (Pre-order/In Stock) + Дата доставки
             status_ico = ""
             delivery_msg = ""
             
             if item.get('stock_status') == 'preorder':
                 status_ico = f" [📦Pre]({item['link']})"
                 if item.get('delivery_date'):
-                    delivery_msg = f"\n  [{self.LINE_PREFIX} {item['delivery_date']}]({item['link']})"
+                    # Для Pre-order залишок йде після дати (зовні лінка, щоб не зламати Markdown)
+                    delivery_msg = f"\n  [{self.LINE_PREFIX} {item['delivery_date']}]({item['link']}){stock_msg}"
+                else:
+                    # Якщо раптом дати немає, але є залишок
+                    status_ico += stock_msg
             elif item.get('stock_status') == 'in_stock':
-                status_ico = f" [✅In]({item['link']})"
+                status_ico = f" [✅In]({item['link']}){stock_msg}"
             elif item.get('stock_status') == 'out_of_stock':
-                status_ico = " ❌Out"
+                status_ico = f" ❌Out{stock_msg}"
                 
             link_text = f"[{item['capacity']}Ah]({item['link']})"
             
@@ -836,16 +1004,38 @@ class NkonMonitor:
             # Парсинг товарів
             products = self.parse_products(html)
             
-            # Додатково: отримання дат доставки для preorder товарів
-            if self.config.get('fetch_delivery_dates', True):
-                preorder_items = [p for p in products if p['stock_status'] == 'preorder']
-                if preorder_items:
-                    logger.info(f"Збір дат доставки для {len(preorder_items)} товарів...")
-                    for p in preorder_items:
-                        date = self._fetch_delivery_date_details(p['link'], driver=driver)
-                        if date:
-                            p['delivery_date'] = date
-                            logger.info(f"Знайдено дату для {p['name']}: {date}")
+            # Додатково: отримання деталей для preorder/in_stock товарів
+            fetch_dates = self.config.get('fetch_delivery_dates', True)
+            fetch_stock = self.config.get('fetch_real_stock', True)
+            
+            if fetch_dates or fetch_stock:
+                # Тільки для тих товарів, що нас цікавлять
+                target_items = [p for p in products if p['stock_status'] in ['in_stock', 'preorder']]
+                
+                if target_items:
+                    logger.info(f"Збір детальної інформації для {len(target_items)} товарів...")
+                    for p in target_items:
+                        # 1. Дата доставки (тільки для preorder)
+                        if fetch_dates and p['stock_status'] == 'preorder':
+                            date = self._fetch_delivery_date_details(p['link'], driver=driver)
+                            if date:
+                                p['delivery_date'] = date
+                        
+                        # 2. Реальний залишок
+                        if fetch_stock:
+                            # fetch_real_stock сам перевірить driver.current_url. 
+                            # Якщо ми щойно викликали _fetch_delivery_date_details, ми вже на тій сторінці.
+                            stock = self._fetch_real_stock(p['link'], driver=driver)
+                            if stock is not None:
+                                p['real_stock'] = stock
+                        
+                        # Логування результату для конкретного товару
+                        details = []
+                        if p.get('delivery_date'): details.append(f"дата {p['delivery_date']}")
+                        if p.get('real_stock') is not None: details.append(f"залишок {p['real_stock']} шт")
+                        
+                        if details:
+                            logger.info(f"  📊 {p['capacity']}Ah | {self._shorten_name(p['name'])}: {', '.join(details)}")
             
             if not products:
                 logger.warning("Не знайдено товарів, що відповідають критеріям")
