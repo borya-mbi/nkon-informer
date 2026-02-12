@@ -8,6 +8,10 @@ state.json.tmp
 "state.previous with CALB.json"
 test*
 
+# Скрипти та утиліти (локальні)
+fix_encoding.py
+close_issue*.ps1
+
 # Логи
 *.log
 
