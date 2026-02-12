@@ -1,10 +1,7 @@
 # Конфіденційні дані
 config.json
 
-# State файли
-state.json
-state.previous.json
-test*
+# State файли (тимчасово дозволено додати)
 
 # Логи
 *.log
