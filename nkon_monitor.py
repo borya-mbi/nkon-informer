@@ -63,7 +63,7 @@ class NkonMonitor:
         self.state_file = 'state.json'
         self.previous_state = {}
         self.last_messages = {}
-        self.stock_baselines = {}
+        self.stock_cumulative_diffs = {}
         
         # Завантаження стану
         loaded_state = self._load_state()
@@ -72,12 +72,12 @@ class NkonMonitor:
         if (loaded_state.get('version') or 0) >= 2:
             self.previous_state = loaded_state.get('products', {})
             self.last_messages = loaded_state.get('last_messages', {})
-            self.stock_baselines = loaded_state.get('stock_baselines', {})
+            self.stock_cumulative_diffs = loaded_state.get('stock_cumulative_diffs', {})
         else:
             # Legacy state (just products)
             self.previous_state = loaded_state
             self.last_messages = {}
-            self.stock_baselines = {}
+            self.stock_cumulative_diffs = {}
             
         self.session = requests.Session()  # Для anti-ban (Telegram API)
 
@@ -120,6 +120,7 @@ class NkonMonitor:
             config['fetch_delivery_dates'] = os.getenv('FETCH_DELIVERY_DATES', 'true').lower() == 'true'
             config['fetch_real_stock'] = os.getenv('FETCH_REAL_STOCK', 'true').lower() == 'true'
             config['detail_fetch_delay'] = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
+            config['restock_threshold'] = int(os.getenv('RESTOCK_THRESHOLD', 100))
             return config
         
         # Fallback до config.json
@@ -144,6 +145,7 @@ class NkonMonitor:
                     config['fetch_delivery_dates'] = file_config.get('fetch_delivery_dates', True)
                     config['fetch_real_stock'] = file_config.get('fetch_real_stock', True)
                     config['detail_fetch_delay'] = float(file_config.get('detail_fetch_delay', float(2.0)))
+                    config['restock_threshold'] = int(file_config.get('restock_threshold', 100))
                     
                     logger.info("✅ Конфігурацію завантажено з config.json")
             except FileNotFoundError:
@@ -183,7 +185,50 @@ class NkonMonitor:
             logger.info(f"💾 State збережено до {self.state_file}: {product_count} товарів")
         except Exception as e:
             logger.error(f"Помилка збереження state: {e}")
-    
+
+    def _update_stock_counters(self, current_products: List[Dict]):
+        """
+        Оновлює лічильники змін залишків.
+        ВАЖЛИВО: Викликається ОДИН РАЗ за запуск, перед format_telegram_message.
+        """
+        restock_threshold = self.config.get('restock_threshold', 100)
+        
+        for item in current_products:
+            if item.get('real_stock') is None:
+                continue
+                
+            current_stock = item['real_stock']
+            key = f"{item['link']}_{item.get('capacity', '0')}"
+            
+            # Обчислення дельти відносно ПОПЕРЕДНЬОГО запуску
+            prev_stock = self.previous_state.get(key, {}).get('real_stock')
+            
+            if prev_stock is None or prev_stock == current_stock:
+                continue  # Новий товар або без змін - пропускаємо
+                
+            delta = current_stock - prev_stock
+            diffs = self.stock_cumulative_diffs.get(key, {"decrease": 0, "increase": 0})
+            
+            short = self._shorten_name(item.get('name', key))
+            if delta < 0:
+                diffs["decrease"] += delta
+                logger.info(f"📉 {short}: {delta} (продаж)")
+            elif delta <= restock_threshold:
+                # Повернення - корекція продажів
+                diffs["decrease"] += delta
+                before_clamp = diffs["decrease"]
+                diffs["decrease"] = min(diffs["decrease"], 0)
+                if diffs["decrease"] != before_clamp:
+                    logger.info(f"🔄 {short}: +{delta} (повернення, decrease обрізано до 0)")
+                else:
+                    logger.info(f"🔄 {short}: +{delta} (повернення, decrease: {diffs['decrease']})")
+            else:
+                # Реальне поповнення
+                diffs["increase"] += delta
+                logger.info(f"🟢 {short}: +{delta} (поповнення складу)")
+                
+            self.stock_cumulative_diffs[key] = diffs
+
     def _init_driver(self):
         """Ініціалізація Selenium Driver"""
         chrome_options = Options()
@@ -718,7 +763,30 @@ class NkonMonitor:
             return "***"
         return f"{text_str[:4]}***{text_str[-4:]}"
 
-    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False) -> Optional[str]:
+    def _format_stock_display(self, item, show_diffs: bool = True) -> str:
+        """Формує рядок залишку. Чисте читання - можна викликати багато разів."""
+        if item.get('real_stock') is None:
+            return ""
+            
+        current = item['real_stock']
+        
+        if not show_diffs:
+            return f" `[{current} шт]`"
+        
+        key = f"{item['link']}_{item.get('capacity', '0')}"
+        diffs = self.stock_cumulative_diffs.get(key, {"decrease": 0, "increase": 0})
+        dec = diffs["decrease"]  # завжди <= 0
+        inc = diffs["increase"]  # завжди >= 0
+        
+        if dec != 0 or inc != 0:
+            diff_str = ""
+            if dec != 0: diff_str += str(dec)       # "-128"
+            if inc != 0: diff_str += f"+{inc}"      # "+2000"
+            return f" `[{current}({diff_str}) шт]`"
+            
+        return f" `[{current} шт]`"
+
+    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False) -> Optional[str]:
         """
         Форматування повідомлення для Telegram
         
@@ -726,6 +794,7 @@ class NkonMonitor:
             changes: Словник зі змінами
             include_unchanged: Чи включати блок "Без змін"
             is_update: Чи є це повідомлення оновленням старого
+            show_stock_diffs: Чи показувати накопичені зміни залишків
             
         Returns:
             Текст повідомлення або None, якщо немає чого відправляти
@@ -757,25 +826,7 @@ class NkonMonitor:
             grade_msg = get_grade_display(grade)
             
             # 1. Підготовка повідомлення про залишок
-            stock_msg = ""
-            if item.get('real_stock') is not None:
-                current_stock = item['real_stock']
-                key = f"{item['link']}_{item.get('capacity', '0')}"
-                
-                # Кумулятивне відстеження: порівнюємо з базовим значенням
-                baseline_stock = self.stock_baselines.get(key)
-                
-                # Якщо базового значення немає - ініціалізуємо його поточним
-                if baseline_stock is None:
-                    self.stock_baselines[key] = current_stock
-                    baseline_stock = current_stock
-                
-                if baseline_stock != current_stock:
-                    diff = current_stock - baseline_stock
-                    sign = "+" if diff > 0 else ""
-                    stock_msg = f" `[{current_stock}({sign}{diff}) шт]`"
-                else:
-                    stock_msg = f" `[{current_stock} шт]`"
+            stock_msg = self._format_stock_display(item, show_diffs=show_stock_diffs)
             
             # 2. Статус (Pre-order/In Stock) + Дата доставки
             status_ico = ""
@@ -1054,6 +1105,7 @@ class NkonMonitor:
                 return
             
             # Виявлення змін
+            self._update_stock_counters(products)
             changes = self.detect_changes(products)
             
             # Логування змін
@@ -1089,20 +1141,17 @@ class NkonMonitor:
             
             if recipients_changes:
                 if msg_changes:
-                    # Є зміни - шлемо НОВЕ повідомлення
+                    # Є зміни - скидаємо лічильники і шлемо НОВЕ чисте повідомлення
+                    self.stock_cumulative_diffs = {}
+                    msg_changes_clean = self.format_telegram_message(changes, include_unchanged=False, is_update=False, show_stock_diffs=False)
                     logger.info(f"Відправка звіту про зміни {len(recipients_changes)} отримувачам...")
-                    self.send_telegram_message(msg_changes, chat_ids=recipients_changes, dry_run=dry_run)
+                    self.send_telegram_message(msg_changes_clean, chat_ids=recipients_changes, dry_run=dry_run)
                     # Очищаємо ID "без змін" повідомлень, бо наступний "без змін" буде новим
                     no_changes_messages = {}
-                    # СКИДАННЯ BASELINE: при новому повідомленні встановлюємо новий відлік
-                    self.stock_baselines = {
-                        f"{p['link']}_{p.get('capacity', '0')}": p['real_stock']
-                        for p in products if p.get('real_stock') is not None
-                    }
                 else:
                     # Немає змін - редагуємо або створюємо "Без змін" з повним списком товарів
-                    # Використовуємо format_telegram_message з include_unchanged=True
-                    no_changes_text = self.format_telegram_message(changes, include_unchanged=True)
+                    # Використовуємо show_stock_diffs=True, бо це редагування з накопиченими дельтами
+                    no_changes_text = self.format_telegram_message(changes, include_unchanged=True, show_stock_diffs=True)
                     
                     # Якщо з якоїсь причини текст пустий, створюємо базовий
                     if not no_changes_text:
@@ -1114,7 +1163,7 @@ class NkonMonitor:
                         
                         if last_nc_msg_id and not dry_run:
                             # Пробуємо редагувати
-                            no_changes_text_update = self.format_telegram_message(changes, include_unchanged=True, is_update=True)
+                            no_changes_text_update = self.format_telegram_message(changes, include_unchanged=True, is_update=True, show_stock_diffs=True)
                             success = self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text_update)
                             if not success:
                                 # Не вдалось - шлемо нове
@@ -1145,7 +1194,7 @@ class NkonMonitor:
             state_to_save = {
                 'products': current_state,
                 'last_messages': new_last_messages,
-                'stock_baselines': self.stock_baselines,
+                'stock_cumulative_diffs': self.stock_cumulative_diffs,
                 'version': 2
             }
             

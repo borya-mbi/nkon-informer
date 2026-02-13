@@ -9,7 +9,7 @@ class MockMonitor(NkonMonitor):
         self.session = None
         self.previous_state = {}
         self.last_messages = {}
-        self.stock_baselines = {}
+        self.stock_cumulative_diffs = {}
         self.state_file = 'state_test.json'
 
 def run_tests():
@@ -71,6 +71,67 @@ def run_tests():
         res = match.group(1) if match else None
         status = "✅" if res else "❌"
         print(f'{status} "{d}" -> {res}')
+
+    # Test 4: Stock Counters
+    print('\n--- TEST 4: Stock Counters (Sales, Returns, Restocks) ---')
+    monitor.config['restock_threshold'] = 100
+    test_link = "https://example.com/battery"
+    test_item = {
+        'link': test_link,
+        'capacity': '280',
+        'name': 'Eve LF280K 280Ah',
+        'real_stock': 100
+    }
+    key = f"{test_link}_280"
+    
+    # 1. Start: stock=100 (first time seen)
+    print("1. Initializing with 100...")
+    monitor._update_stock_counters([test_item])
+    print(f"   Diffs: {monitor.stock_cumulative_diffs.get(key)}")
+    
+    # 2. Sale: stock=90
+    print("2. Sale: 100 -> 90...")
+    monitor.previous_state = {key: {'real_stock': 100}}
+    test_item['real_stock'] = 90
+    monitor._update_stock_counters([test_item])
+    diffs = monitor.stock_cumulative_diffs[key]
+    print(f"   Real stock: 90, Diffs: {diffs}")
+    
+    # 3. Return: stock=95 (<= threshold)
+    print("3. Return: 90 -> 95...")
+    monitor.previous_state = {key: {'real_stock': 90}}
+    test_item['real_stock'] = 95
+    monitor._update_stock_counters([test_item])
+    diffs = monitor.stock_cumulative_diffs[key]
+    print(f"   Real stock: 95, Diffs: {diffs}")
+    
+    # 4. Restock: stock=2095 (> threshold)
+    print("4. Restock: 95 -> 2095...")
+    monitor.previous_state = {key: {'real_stock': 95}}
+    test_item['real_stock'] = 2095
+    monitor._update_stock_counters([test_item])
+    diffs = monitor.stock_cumulative_diffs[key]
+    print(f"   Real stock: 2095, Diffs: {diffs}")
+    
+    # 5. Format check (with diffs)
+    display_with_diffs = monitor._format_stock_display(test_item, show_diffs=True)
+    print(f"   With diffs: {display_with_diffs}")
+    
+    # 6. Format check (without diffs - Full Report mode)
+    display_clean = monitor._format_stock_display(test_item, show_diffs=False)
+    print(f"   Clean (Full Report): {display_clean}")
+    
+    expected_diffs = {'decrease': -5, 'increase': 2000}
+    expected_display = " `[2095(-5+2000) шт]`"
+    expected_clean = " `[2095 шт]`"
+    
+    if diffs == expected_diffs and display_with_diffs == expected_display and display_clean == expected_clean:
+        print("✅ TEST 4 PASSED")
+    else:
+        print(f"❌ TEST 4 FAILED")
+        if diffs != expected_diffs: print(f"   Diffs: {diffs} != {expected_diffs}")
+        if display_with_diffs != expected_display: print(f"   Display: {display_with_diffs} != {expected_display}")
+        if display_clean != expected_clean: print(f"   Clean: {display_clean} != {expected_clean}")
 
 if __name__ == "__main__":
     run_tests()
