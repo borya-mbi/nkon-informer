@@ -73,11 +73,14 @@ class NkonMonitor:
             self.previous_state = loaded_state.get('products', {})
             self.last_messages = loaded_state.get('last_messages', {})
             self.stock_cumulative_diffs = loaded_state.get('stock_cumulative_diffs', {})
+            nt_str = loaded_state.get('last_notification_time')
+            self.last_notification_time = datetime.fromisoformat(nt_str) if nt_str else datetime.min
         else:
             # Legacy state (just products)
             self.previous_state = loaded_state
             self.last_messages = {}
             self.stock_cumulative_diffs = {}
+            self.last_notification_time = datetime.min
             
         self.session = requests.Session()  # Для anti-ban (Telegram API)
 
@@ -121,6 +124,14 @@ class NkonMonitor:
             config['fetch_real_stock'] = os.getenv('FETCH_REAL_STOCK', 'true').lower() == 'true'
             config['detail_fetch_delay'] = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
             config['restock_threshold'] = int(os.getenv('RESTOCK_THRESHOLD', 100))
+            
+            # Smart Heartbeat (Automatic Cooldown)
+            heartbeat_times_str = os.getenv('HEARTBEAT_TIMES', '8:00')
+            config['heartbeat_times'] = self._parse_heartbeat_times(heartbeat_times_str)
+            config['heartbeat_cooldown'] = self._calculate_auto_cooldown(config['heartbeat_times'])
+            
+            logger.info(f"Heartbeat: {len(config['heartbeat_times'])} слотів, auto-cooldown={config['heartbeat_cooldown']:.1f}год")
+            
             return config
         
         # Fallback до config.json
@@ -147,7 +158,12 @@ class NkonMonitor:
                     config['detail_fetch_delay'] = float(file_config.get('detail_fetch_delay', float(2.0)))
                     config['restock_threshold'] = int(file_config.get('restock_threshold', 100))
                     
-                    logger.info("✅ Конфігурацію завантажено з config.json")
+                    # Smart Heartbeat (JSON Fallback with Auto Cooldown)
+                    hb_times_raw = file_config.get('HEARTBEAT_TIMES') or file_config.get('heartbeat_times', '8:00')
+                    config['heartbeat_times'] = self._parse_heartbeat_times(str(hb_times_raw))
+                    config['heartbeat_cooldown'] = self._calculate_auto_cooldown(config['heartbeat_times'])
+                    
+                    logger.info(f"✅ Конфігурацію завантажено з config.json (auto-cooldown={config['heartbeat_cooldown']:.1f}год)")
             except FileNotFoundError:
                 logger.error("❌ ПОМИЛКА: Не знайдено налаштувань!")
                 logger.error("1. Або встановіть змінні середовища (TELEGRAM_BOT_TOKEN, etc)")
@@ -157,6 +173,58 @@ class NkonMonitor:
                 logger.error(f"Помилка парсингу JSON: {e}")
                 sys.exit(1)
         return config
+
+    def _parse_heartbeat_times(self, times_str: str) -> List:
+        """Парсинг рядка часів heartbeat ('8:00,12:00,16:00') у список time об'єктів."""
+        from datetime import time as dt_time
+        result = []
+        for part in times_str.split(','):
+            part = part.strip()
+            try:
+                # Підтримка форматів H:M та HH:MM
+                if ':' in part:
+                    h, m = part.split(':')
+                    result.append(dt_time(int(h), int(m)))
+                else:
+                    # Спроба розпізнати як просто годину
+                    result.append(dt_time(int(part), 0))
+            except (ValueError, AttributeError):
+                logger.warning(f"⚠️ Невірний формат heartbeat часу: '{part}', пропускаємо")
+        
+        if not result:
+            logger.warning("⚠️ Жоден heartbeat час не розпізнано, використовуємо 8:00 за замовчуванням")
+            result = [dt_time(8, 0)]
+        
+        result.sort()
+        return result
+
+    def _calculate_auto_cooldown(self, heartbeat_times: List) -> float:
+        """
+        Розраховує час кулдауну як мінімальний інтервал між слотами heartbeat.
+        Якщо слот один - кулдаун 24 години.
+        """
+        if not heartbeat_times or len(heartbeat_times) <= 1:
+            return 24.0
+        
+        # Обчислюємо інтервали в хвилинах (враховуючи перехід через північ)
+        gaps_minutes = []
+        for i in range(len(heartbeat_times)):
+            current = heartbeat_times[i]
+            # Наступний слот (циклічно)
+            next_slot = heartbeat_times[(i + 1) % len(heartbeat_times)]
+            
+            cur_min = current.hour * 60 + current.minute
+            nxt_min = next_slot.hour * 60 + next_slot.minute
+            
+            # Модуль 24 години (1440 хв)
+            gap = (nxt_min - cur_min) % 1440
+            if gap > 0:
+                gaps_minutes.append(gap)
+        
+        if not gaps_minutes:
+            return 24.0
+            
+        return min(gaps_minutes) / 60.0
             
     def _load_state(self) -> Dict:
         """Завантаження попереднього стану (для відстеження змін)"""
@@ -1046,7 +1114,39 @@ class NkonMonitor:
             
         return sent_messages
     
-    def run(self, dry_run: bool = False):
+    def _should_notify(self, has_changes: bool) -> tuple:
+        """
+        Визначає, чи потрібно надсилати повідомлення зі звуком.
+        
+        Returns: (should_notify: bool, reason: str)
+        """
+        if has_changes:
+            return True, "changes"
+        
+        now = datetime.now()
+        last = self.last_notification_time
+        # Cooldown за замовчуванням 24h (буде автоматично перевизначено при завантаженні конфігу)
+        cooldown_hours = self.config.get('heartbeat_cooldown', 24.0)
+        
+        # 1. Перевірка Cooldown (найвищий пріоритет для тиші)
+        if (now - last).total_seconds() < (cooldown_hours * 3600):
+            logger.info(f"🔕 Heartbeat пропущено: cooldown (остання {last.strftime('%H:%M')})")
+            return False, "cooldown"
+        
+        # 2. Перевірка Heartbeat слотів
+        heartbeat_times = self.config.get('heartbeat_times', [])
+        for hb_time in heartbeat_times:
+            # Чи зараз >= цей слот?
+            if now.time() >= hb_time:
+                # Чи вже була нотифікація ПІСЛЯ цього слоту сьогодні?
+                slot_dt = datetime.combine(now.date(), hb_time)
+                if last < slot_dt:
+                    logger.info(f"🔔 Heartbeat: слот {hb_time.strftime('%H:%M')}")
+                    return True, "heartbeat"
+        
+        return False, "silent"
+
+    def run(self, dry_run: bool = False, force_notify: bool = False):
         """
         Основний цикл моніторингу
         
@@ -1142,15 +1242,22 @@ class NkonMonitor:
             no_changes_messages = {str(cid): old_no_changes[str(cid)] for cid in recipients_changes if str(cid) in old_no_changes}
             
             if recipients_changes:
+                should_notify, reason = self._should_notify(bool(msg_changes))
+                
+                # Примусова нотифікація через CLI
+                if force_notify:
+                    should_notify, reason = True, "force-notify"
+                
                 if msg_changes:
                     # Є зміни - скидаємо лічильники і шлемо НОВЕ чисте повідомлення
                     self.stock_cumulative_diffs = {}
                     msg_changes_clean = self.format_telegram_message(changes, include_unchanged=False, is_update=False, show_stock_diffs=False)
                     logger.info(f"Відправка звіту про зміни {len(recipients_changes)} отримувачам...")
                     self.send_telegram_message(msg_changes_clean, chat_ids=recipients_changes, dry_run=dry_run)
+                    # Оновлюємо час останньої нотифікації (був звук)
+                    self.last_notification_time = datetime.now()
                     
-                    # Затримка між повідомленнями, щоб Telegram встиг доставити нотифікацію
-                    # першого повідомлення перед відправкою беззвучного другого
+                    # Затримка між повідомленнями
                     if not dry_run:
                         time.sleep(2)
                     
@@ -1172,44 +1279,75 @@ class NkonMonitor:
                         no_changes_messages = {str(cid): mid for cid, mid in sent_state.items()}
                     else:
                         no_changes_messages = {}
+                elif reason == "heartbeat" or reason == "force-notify":
+                    # Розумний Heartbeat: редагуємо старе + нове зі звуком
+                    if reason == "force-notify":
+                        logger.info("🔔 Режим: force-notify (примусова нотифікація)")
+                    else:
+                        logger.info(f"🔔 Heartbeat: активуємо нотифікацію за розкладом")
+
+                    # 1. Редагуємо старе "Без змін" з фінальними дельтами
+                    no_changes_text_update = self.format_telegram_message(changes, include_unchanged=True, is_update=True, show_stock_diffs=True)
+                    for chat_id in recipients_changes:
+                        last_nc_msg_id = no_changes_messages.get(str(chat_id))
+                        if last_nc_msg_id and not dry_run:
+                            self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text_update)
+                    
+                    # 2. Скидаємо лічильники (нове повідомлення = контрольна точка)
+                    self.stock_cumulative_diffs = {}
+                    
+                    # 3. Затримка
+                    if not dry_run:
+                        time.sleep(2)
+                    
+                    # 4. Надсилаємо НОВЕ "Новий стан" ЗІ ЗВУКОМ (це і є heartbeat)
+                    no_changes_only = {
+                        'new': [], 'removed': [], 'price_changes': [],
+                        'status_changes': [], 'current': changes['current']
+                    }
+                    msg_heartbeat = self.format_telegram_message(
+                        no_changes_only, include_unchanged=True, is_update=False,
+                        show_stock_diffs=False, unchanged_header="Новий стан"
+                    )
+                    if msg_heartbeat:
+                        logger.info(f"🔔 Відправка Heartbeat повідомлення {len(recipients_changes)} отримувачам...")
+                        sent_state = self.send_telegram_message(
+                            msg_heartbeat, chat_ids=recipients_changes,
+                            dry_run=dry_run, disable_notification=False
+                        )
+                        # Оновлюємо час останньої нотифікації (був звук)
+                        self.last_notification_time = datetime.now()
+                        no_changes_messages = {str(cid): mid for cid, mid in sent_state.items()}
                 else:
-                    # Немає змін - редагуємо або створюємо "Без змін" з повним списком товарів
-                    # Використовуємо show_stock_diffs=True, бо це редагування з накопиченими дельтами
+                    # Немає змін і не час для heartbeat - тихо редагуємо "Без змін"
                     no_changes_text = self.format_telegram_message(changes, include_unchanged=True, show_stock_diffs=True)
                     
-                    # Якщо з якоїсь причини текст пустий, створюємо базовий
                     if not no_changes_text:
-                        from datetime import datetime
                         no_changes_text = f"🔋 *NKON Monitor*\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
                     
                     for chat_id in recipients_changes:
                         last_nc_msg_id = no_changes_messages.get(str(chat_id))
                         
                         if last_nc_msg_id and not dry_run:
-                            # Пробуємо редагувати
                             no_changes_text_update = self.format_telegram_message(changes, include_unchanged=True, is_update=True, show_stock_diffs=True)
                             success = self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text_update)
                             if not success:
-                                # Не вдалось - шлемо нове
                                 no_changes_text_new = self.format_telegram_message(changes, include_unchanged=True, is_update=False)
-                                sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run)
+                                sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run, disable_notification=True)
                                 if sent.get(chat_id):
                                     no_changes_messages[str(chat_id)] = sent[chat_id]
                         else:
-                            # Нема попереднього - шлемо нове
                             no_changes_text_new = self.format_telegram_message(changes, include_unchanged=True, is_update=False)
-                            sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run)
+                            sent = self.send_telegram_message(no_changes_text_new, chat_ids={chat_id}, dry_run=dry_run, disable_notification=True)
                             if sent.get(chat_id):
                                 no_changes_messages[str(chat_id)] = sent[chat_id]
                     
-                    logger.info("Оновлено 'Без змін' повідомлення для Changes Only")
+                    logger.info("Оновлено 'Без змін' (тихо) повідомлення для Changes Only")
             
             # Зберігаємо ID "без змін" повідомлень
             new_last_messages['_no_changes'] = no_changes_messages
             
             # Збереження стану
-            # Використовуємо комбінацію лінка та ємності як унікальний ключ 
-            # (на випадок якщо NKON використовує однакові лінки для різних Grade/Capacity)
             current_state = {}
             for p in products:
                 key = f"{p['link']}_{p.get('capacity', '0')}"
@@ -1219,10 +1357,14 @@ class NkonMonitor:
                 'products': current_state,
                 'last_messages': new_last_messages,
                 'stock_cumulative_diffs': self.stock_cumulative_diffs,
+                'last_notification_time': self.last_notification_time.isoformat(),
                 'version': 2
             }
             
-            self._save_state(state_to_save)
+            if not dry_run:
+                self._save_state(state_to_save)
+            else:
+                logger.info("🚫 Dry Run: State НЕ оновлено (симуляція)")
             
             logger.info("=" * 60)
             logger.info("Моніторинг завершено успішно")
@@ -1259,11 +1401,13 @@ def main():
                         help='Запуск без відправки Telegram повідомлень (для тестування)')
     parser.add_argument('--config', default='config.json',
                         help='Шлях до файлу конфігурації (за замовчуванням: config.json)')
+    parser.add_argument('--force-notify', action='store_true',
+                        help='Примусова нотифікація зі звуком (для тестування)')
     
     args = parser.parse_args()
     
     monitor = NkonMonitor(config_path=args.config)
-    monitor.run(dry_run=args.dry_run)
+    monitor.run(dry_run=args.dry_run, force_notify=args.force_notify)
 
 
 if __name__ == '__main__':

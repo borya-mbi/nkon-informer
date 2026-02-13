@@ -11,6 +11,8 @@ test*
 # Скрипти та утиліти (локальні)
 fix_encoding.py
 close_issue*.ps1
+manage_issue_*.py
+_issue_*_tmp.md
 HANDOFF.md
 
 # Логи
@@ -60,3 +62,4 @@ assets/*.png
 
 # Agent Documentation
 SKILL.md
+HANDOFF*.md

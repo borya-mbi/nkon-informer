@@ -164,5 +164,88 @@ def run_tests():
     except TypeError as e:
         print(f"❌ send_telegram_message rejected disable_notification: {e}")
 
+    # Test 7: Smart Heartbeat Logic (_should_notify)
+    print('\n--- TEST 7: Smart Heartbeat Logic (_should_notify) ---')
+    from datetime import datetime, time as dt_time, timedelta
+    
+    monitor.config['heartbeat_times'] = [dt_time(8, 0), dt_time(16, 0)]
+    monitor.config['heartbeat_cooldown'] = monitor._calculate_auto_cooldown(monitor.config['heartbeat_times'])
+    
+    # Використовуємо фіксовану дату як базу для тестів, щоб не залежати від реального "зараз"
+    base_date = datetime(2025, 1, 1, 12, 0)
+    
+    # Case A: Changes detected
+    res, reason = monitor._should_notify(has_changes=True)
+    status = "✅" if (res, reason) == (True, "changes") else "❌"
+    print(f'{status} Case A (Changes): {res}, reason: {reason}')
+
+    # Case B: Cooldown active (last notification 2h ago relative to now)
+    now_real = datetime.now()
+    monitor.last_notification_time = now_real - timedelta(hours=2)
+    res, reason = monitor._should_notify(has_changes=False)
+    status = "✅" if (res, reason) == (False, "cooldown") else "❌"
+    print(f'{status} Case B (Cooldown): {res}, reason: {reason}')
+
+    # Case C: Heartbeat time reached (now >= 8:00, last yesterday - sufficiency far for cooldown)
+    # last = 20:00 day before base_date
+    monitor.last_notification_time = base_date - timedelta(days=1)
+    # mock_now = 8:05 AM on base_date
+    mock_now = datetime.combine(base_date.date(), dt_time(8, 5))
+    import unittest.mock
+    with unittest.mock.patch('nkon_monitor.datetime') as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.combine = datetime.combine
+        res, reason = monitor._should_notify(has_changes=False)
+        status = "✅" if (res, reason) == (True, "heartbeat") else "❌"
+        print(f'{status} Case C (Heartbeat 8:00): {res}, reason: {reason}')
+
+    # Case D: Before heartbeat time (now = 7:30)
+    mock_now = datetime.combine(base_date.date(), dt_time(7, 30))
+    with unittest.mock.patch('nkon_monitor.datetime') as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.combine = datetime.combine
+        res, reason = monitor._should_notify(has_changes=False)
+        status = "✅" if (res, reason) == (False, "silent") else "❌"
+        print(f'{status} Case D (Before Heartbeat): {res}, reason: {reason}')
+
+    # Case E: First slot passed, second slot reached (now 16:30, last was at 8:05)
+    # З автоматичним кулдауном для [8:00, 16:00] він буде 8 годин.
+    # 16:30 - 8:05 = ~8.4 год. Це > 8 год, тому має спрацювати HEARTBEAT!
+    monitor.last_notification_time = datetime.combine(base_date.date(), dt_time(8, 5))
+    mock_now = datetime.combine(base_date.date(), dt_time(16, 30))
+    with unittest.mock.patch('nkon_monitor.datetime') as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.combine = datetime.combine
+        res, reason = monitor._should_notify(has_changes=False)
+        status = "✅" if (res, reason) == (True, "heartbeat") else "❌"
+        print(f'{status} Case E (Heartbeat 16:00, auto-cooldown): {res}, reason: {reason}')
+    
+    # Case F: All slots today already handled (now 20:00, last was 16:10)
+    monitor.last_notification_time = datetime.combine(base_date.date(), dt_time(16, 10))
+    mock_now = datetime.combine(base_date.date(), dt_time(20, 0))
+    with unittest.mock.patch('nkon_monitor.datetime') as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.combine = datetime.combine
+        res, reason = monitor._should_notify(has_changes=False)
+        status = "✅" if (res, reason) == (False, "cooldown") else "❌"
+        print(f'{status} Case F (After all heartbeats, cooldown active): {res}, reason: {reason}')
+
+    # Test 8: Automatic Cooldown Calculation
+    print('\n--- TEST 8: Automatic Cooldown Calculation ---')
+    test_cases = [
+        ([dt_time(8, 0)], 24.0),
+        ([dt_time(8, 0), dt_time(20, 0)], 12.0),
+        ([dt_time(8, 0), dt_time(12, 0), dt_time(16, 0)], 4.0),
+        ([dt_time(7, 0), dt_time(12, 0), dt_time(18, 0)], 5.0), # 7-12=5, 12-18=6, 18-7=13
+    ]
+    for times, expected in test_cases:
+        res = monitor._calculate_auto_cooldown(times)
+        status = "✅" if res == expected else "❌"
+        print(f'{status} Intervals for {times} -> {res}h (Expected: {expected}h)')
+
 if __name__ == "__main__":
     run_tests()
