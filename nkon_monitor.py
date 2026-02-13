@@ -786,7 +786,7 @@ class NkonMonitor:
             
         return f" `[{current} шт]`"
 
-    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False) -> Optional[str]:
+    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False, unchanged_header: str = "Без змін") -> Optional[str]:
         """
         Форматування повідомлення для Telegram
         
@@ -795,6 +795,7 @@ class NkonMonitor:
             include_unchanged: Чи включати блок "Без змін"
             is_update: Чи є це повідомлення оновленням старого
             show_stock_diffs: Чи показувати накопичені зміни залишків
+            unchanged_header: Заголовок блоку незмінених товарів ("Без змін" або "Новий стан")
             
         Returns:
             Текст повідомлення або None, якщо немає чого відправляти
@@ -947,7 +948,7 @@ class NkonMonitor:
             unchanged = [p for p in current if p['link'] not in changed_links]
             
             if unchanged:
-                msg += f"📋 *Без змін ({len(unchanged)}):*\n"
+                msg += f"📋 *{unchanged_header} ({len(unchanged)}):*\n"
                 for item in unchanged:
                     msg += format_line(item, "•") + "\n"
         
@@ -987,7 +988,7 @@ class NkonMonitor:
             logger.warning(f"Помилка редагування в {masked_chat}: {e}")
             return False
 
-    def send_telegram_message(self, message: str, chat_ids: Set[str] = None, dry_run: bool = False) -> Dict[str, int]:
+    def send_telegram_message(self, message: str, chat_ids: Set[str] = None, dry_run: bool = False, disable_notification: bool = False) -> Dict[str, int]:
         """
         Відправка повідомлення в Telegram
         Returns: Dict {chat_id: message_id}
@@ -1016,7 +1017,8 @@ class NkonMonitor:
                 'chat_id': chat_id,
                 'text': message,
                 'parse_mode': 'Markdown',
-                'disable_web_page_preview': False
+                'disable_web_page_preview': False,
+                'disable_notification': disable_notification
             }
             
             try:
@@ -1146,8 +1148,30 @@ class NkonMonitor:
                     msg_changes_clean = self.format_telegram_message(changes, include_unchanged=False, is_update=False, show_stock_diffs=False)
                     logger.info(f"Відправка звіту про зміни {len(recipients_changes)} отримувачам...")
                     self.send_telegram_message(msg_changes_clean, chat_ids=recipients_changes, dry_run=dry_run)
-                    # Очищаємо ID "без змін" повідомлень, бо наступний "без змін" буде новим
-                    no_changes_messages = {}
+                    
+                    # Затримка між повідомленнями, щоб Telegram встиг доставити нотифікацію
+                    # першого повідомлення перед відправкою беззвучного другого
+                    if not dry_run:
+                        time.sleep(2)
+                    
+                    # Відправляємо "Новий стан" з повним списком товарів (беззвучно)
+                    no_changes_only = {
+                        'new': [], 'removed': [], 'price_changes': [],
+                        'status_changes': [], 'current': changes['current']
+                    }
+                    msg_new_state = self.format_telegram_message(
+                        no_changes_only, include_unchanged=True, is_update=False,
+                        show_stock_diffs=False, unchanged_header="Новий стан"
+                    )
+                    if msg_new_state:
+                        logger.info(f"Відправка 'Новий стан' (silent) {len(recipients_changes)} отримувачам...")
+                        sent_state = self.send_telegram_message(
+                            msg_new_state, chat_ids=recipients_changes,
+                            dry_run=dry_run, disable_notification=True
+                        )
+                        no_changes_messages = {str(cid): mid for cid, mid in sent_state.items()}
+                    else:
+                        no_changes_messages = {}
                 else:
                     # Немає змін - редагуємо або створюємо "Без змін" з повним списком товарів
                     # Використовуємо show_stock_diffs=True, бо це редагування з накопиченими дельтами

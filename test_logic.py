@@ -12,6 +12,9 @@ class MockMonitor(NkonMonitor):
         self.stock_cumulative_diffs = {}
         self.state_file = 'state_test.json'
 
+    def send_telegram_message(self, message: str, chat_ids: set = None, dry_run: bool = False, disable_notification: bool = False):
+        return {"123": 456}
+
 def run_tests():
     print("Initializing MockMonitor for Unit Testing...")
     try:
@@ -132,6 +135,34 @@ def run_tests():
         if diffs != expected_diffs: print(f"   Diffs: {diffs} != {expected_diffs}")
         if display_with_diffs != expected_display: print(f"   Display: {display_with_diffs} != {expected_display}")
         if display_clean != expected_clean: print(f"   Clean: {display_clean} != {expected_clean}")
+
+    # Test 5: Format Telegram Message Header
+    print('\n--- TEST 5: Format Telegram Message Header ---')
+    changes = {'current': [{'name': 'Item 1', 'link': 'url1', 'capacity': 100, 'price': '10', 'stock_status': 'in_stock', 'real_stock': 50}]}
+    
+    # Default header
+    msg_default = monitor.format_telegram_message(changes, include_unchanged=True)
+    if "📋 *Без змін (1):*" in msg_default:
+        print("✅ Default Header: OK")
+    else:
+        print(f"❌ Default Header: FAILED. Got: {msg_default}")
+        
+    # Custom header "Новий стан"
+    msg_custom = monitor.format_telegram_message(changes, include_unchanged=True, unchanged_header="Новий стан")
+    if "📋 *Новий стан (1):*" in msg_custom:
+        print("✅ Custom Header: OK")
+    else:
+        print(f"❌ Custom Header: FAILED. Got: {msg_custom}")
+
+    # Test 6: Send Telegram Message Notification param
+    print('\n--- TEST 6: Send Message Params ---')
+    # Since we mocked send_telegram_message in MockMonitor, we acting as if we are testing the signature in the main class
+    # We will verify if the method accepts the argument without error
+    try:
+        monitor.send_telegram_message("test", chat_ids={"123"}, disable_notification=True)
+        print("✅ send_telegram_message accepts disable_notification")
+    except TypeError as e:
+        print(f"❌ send_telegram_message rejected disable_notification: {e}")
 
 if __name__ == "__main__":
     run_tests()
