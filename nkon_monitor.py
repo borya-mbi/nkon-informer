@@ -1185,6 +1185,14 @@ class NkonMonitor:
                             date = self._fetch_delivery_date_details(p['link'], driver=driver)
                             if date:
                                 p['delivery_date'] = date
+                            else:
+                                # Fallback: якщо не вдалося отримати дату (сбій парсингу/мережі),
+                                # використовуємо попереднє відоме значення, щоб уникнути помилкових сповіщень.
+                                key = f"{p['link']}_{p.get('capacity', '0')}"
+                                old_p = self.previous_state.get(key)
+                                if old_p and old_p.get('stock_status') == 'preorder' and old_p.get('delivery_date'):
+                                    p['delivery_date'] = old_p['delivery_date']
+                                    logger.warning(f"⚠️ Не вдалося отримати дату для {p.get('capacity')}Ah, використано кеш: {p['delivery_date']}")
                         
                         # 2. Реальний залишок
                         if fetch_stock:
@@ -1193,6 +1201,13 @@ class NkonMonitor:
                             stock = self._fetch_real_stock(p['link'], driver=driver)
                             if stock is not None:
                                 p['real_stock'] = stock
+                            else:
+                                # Fallback для залишку (якщо збій Selenium або сайту)
+                                key = f"{p['link']}_{p.get('capacity', '0')}"
+                                old_p = self.previous_state.get(key)
+                                if old_p and old_p.get('real_stock') is not None:
+                                    p['real_stock'] = old_p['real_stock']
+                                    logger.warning(f"⚠️ Не вдалося отримати залишок для {p.get('capacity')}Ah, використано кеш: {p['real_stock']}")
                         
                         # Логування результату для конкретного товару
                         details = []
