@@ -178,7 +178,9 @@ class NkonMonitor:
         """Парсинг рядка часів heartbeat ('8:00,12:00,16:00') у список time об'єктів."""
         from datetime import time as dt_time
         result = []
-        for part in times_str.split(','):
+        # Підтримка обох роздільників (кома та крапка з комою)
+        normalized_str = times_str.replace(';', ',')
+        for part in normalized_str.split(','):
             part = part.strip()
             try:
                 # Підтримка форматів H:M та HH:MM
@@ -1264,15 +1266,25 @@ class NkonMonitor:
                     should_notify, reason = True, "force-notify"
                 
                 if msg_changes:
-                    # Є зміни - скидаємо лічильники і шлемо НОВЕ чисте повідомлення
+                    # 1. Спершу оновлюємо старі повідомлення "Без змін" (якщо вони були),
+                    # щоб зафіксувати фінальні цифри продажів перед новим звітом.
+                    no_changes_text_final = self.format_telegram_message(changes, include_unchanged=True, is_update=True, show_stock_diffs=True)
+                    for chat_id in recipients_changes:
+                        last_nc_msg_id = no_changes_messages.get(str(chat_id))
+                        if last_nc_msg_id and not dry_run:
+                            self.edit_telegram_message(str(chat_id), last_nc_msg_id, no_changes_text_final)
+
+                    # 2. Скидаємо лічильники ТІЛЬКИ ПІСЛЯ оновлення старого повідомлення
                     self.stock_cumulative_diffs = {}
+
+                    # 3. Надсилаємо НОВЕ повідомлення про зміни
                     msg_changes_clean = self.format_telegram_message(changes, include_unchanged=False, is_update=False, show_stock_diffs=False)
                     logger.info(f"Відправка звіту про зміни {len(recipients_changes)} отримувачам...")
                     self.send_telegram_message(msg_changes_clean, chat_ids=recipients_changes, dry_run=dry_run)
-                    # Оновлюємо час останньої нотифікації (був звук)
+                    
+                    # Оновлюємо час останньої нотифікації
                     self.last_notification_time = datetime.now()
                     
-                    # Затримка між повідомленнями
                     if not dry_run:
                         time.sleep(2)
                     
