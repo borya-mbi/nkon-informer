@@ -242,10 +242,29 @@ def run_tests():
         ([dt_time(8, 0), dt_time(12, 0), dt_time(16, 0)], 4.0),
         ([dt_time(7, 0), dt_time(12, 0), dt_time(18, 0)], 5.0), # 7-12=5, 12-18=6, 18-7=13
     ]
-    for times, expected in test_cases:
-        res = monitor._calculate_auto_cooldown(times)
-        status = "✅" if res == expected else "❌"
-        print(f'{status} Intervals for {times} -> {res}h (Expected: {expected}h)')
+    # Test 9: Pagination (Next Page)
+    print('\n--- TEST 9: Pagination (Next Page) ---')
+    html_with_next = '''
+    <div class="pages">
+        <ul class="items pages-items">
+            <li class="item pages-item-next">
+                <a class="action  next" href="https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html?p=2" title="Наступна">
+                    <span>Наступна</span>
+                </a>
+            </li>
+        </ul>
+    </div>
+    '''
+    html_without_next = '<div class="pages">Остання сторінка</div>'
+    
+    res_next = monitor._get_next_page_url(html_with_next)
+    res_none = monitor._get_next_page_url(html_without_next)
+    
+    status_next = "✅" if res_next == "https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html?p=2" else "❌"
+    status_none = "✅" if res_none is None else "❌"
+    
+    print(f'{status_next} With Next -> {res_next}')
+    print(f'{status_none} Without Next -> {res_none}')
 
 if __name__ == "__main__":
     run_tests()

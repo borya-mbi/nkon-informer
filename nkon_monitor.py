@@ -581,6 +581,18 @@ class NkonMonitor:
             return int(match.group(1))
         return None
     
+    def _get_next_page_url(self, html: str) -> Optional[str]:
+        """
+        Знаходить URL наступної сторінки в пагінації Magento 2
+        """
+        soup = BeautifulSoup(html, 'html.parser')
+        next_item = soup.find('li', class_='pages-item-next')
+        if next_item:
+            next_link = next_item.find('a')
+            if next_link and next_link.get('href'):
+                return next_link.get('href')
+        return None
+
     def parse_products(self, html: str) -> List[Dict]:
         """
         Парсинг товарів зі сторінки
@@ -1164,12 +1176,33 @@ class NkonMonitor:
             # Ініціалізація драйвера
             driver = self._init_driver()
             
-            # Завантаження сторінки
+            # Завантаження сторінок з пагінацією
             url = self.config.get('url', 'https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html')
-            html = self.fetch_page_with_selenium(url, driver=driver)
             
-            # Парсинг товарів
-            products = self.parse_products(html)
+            products = []
+            current_url = url
+            page_num = 1
+            max_pages = 5  # Захист від нескінченних циклів
+            
+            while current_url and page_num <= max_pages:
+                if page_num > 1:
+                    logger.info(f"Перехід до сторінки {page_num}: {current_url}")
+                
+                html = self.fetch_page_with_selenium(current_url, driver=driver)
+                
+                # Парсинг товарів з поточної сторінки
+                page_products = self.parse_products(html)
+                products.extend(page_products)
+                
+                # Пошук наступної сторінки
+                current_url = self._get_next_page_url(html)
+                if current_url:
+                    page_num += 1
+                else:
+                    break
+            
+            if page_num > 1:
+                logger.info(f"Загалом знайдено {len(products)} товарів на {page_num} сторінках")
             
             # Додатково: отримання деталей для preorder/in_stock товарів
             fetch_dates = self.config.get('fetch_delivery_dates', True)
