@@ -371,6 +371,7 @@ class NkonMonitor:
             if date_elem:
                 match = re.search(r'(\d{1,2})-(\d{1,2})-(\d{4})', date_elem.get_text())
                 if match:
+                    # Regex шукає DD-MM-YYYY в тексті (працює і без пробілу: "доставки:27-03-2026")
                     # Нормалізація дати до DD-MM-YYYY (додавання нулів)
                     d, m, y = match.groups()
                     return f"{int(d):02d}-{int(m):02d}-{y}"
@@ -483,15 +484,29 @@ class NkonMonitor:
                 driver.execute_script("arguments[0].click();", cart_button)
             
             # 4. Очікування повідомлення помилки
-            error_selector = ".message-error, .mage-error, .message.error"
-            try:
-                WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, error_selector))
-                )
-            except:
-                logger.warning(f"Повідомлення про залишок не з'явилося на {url} (можливо, товар вільний для 30к шт?)")
-                # Перевіримо, чи немає інших помилок (наприклад, "This is a required field")
-                return None
+            error_selector = ".message-error, .mage-error, .message.error, .message-success"
+            
+            # Спершу перевіримо, чи помилка ВЖЕ є (наприклад, від попереднього разу)
+            def find_error():
+                try:
+                    return driver.find_elements(By.CSS_SELECTOR, error_selector)
+                except:
+                    return []
+
+            # Якщо помилки нема, чекаємо
+            if not find_error():
+                try:
+                    WebDriverWait(driver, 12).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, error_selector))
+                    )
+                except:
+                    # Перевіримо, чи поле qty все ще 30000. Якщо воно скинулося в 1 - значить сайт щось зробив
+                    current_qty = qty_input.get_attribute('value')
+                    logger.warning(f"Повідомлення не з'явилося на {url}. Qty: {current_qty}")
+                    if current_qty != "30000":
+                        logger.info("Поле qty змінилося без повідомлення - вважаємо критичною помилкою наявності (0 шт)")
+                        return 0
+                    return None
             
             # 5. Парсинг тексту помилки
             # ВАЖЛИВО: беремо ОСТАННІЙ елемент помилки, бо на сторінці можуть 
@@ -518,7 +533,19 @@ class NkonMonitor:
                         logger.info(f"✅ Знайдено реальний залишок: {stock_val}")
                         return stock_val
                 
-                logger.warning(f"Знайдено помилку, але regex не спрацював. Текст: '{text}' (URL: {url})")
+                # Специфічні фрази для нульового залишку
+                zero_stock_patterns = [
+                    r'немає в наявності',
+                    r'not available',
+                    r'not in stock',
+                    r'out of stock'
+                ]
+                if any(re.search(p, text, re.IGNORECASE) for p in zero_stock_patterns):
+                    logger.warning(f"Знайдено повідомлення про відсутність товару (0 шт): '{text}'")
+                    return 0
+                
+                logger.warning(f"Помилка знайдена, але кількість не розпізнана: '{text}' (URL: {url})")
+                return 0 # Вважаємо 0, якщо є помилка наявності, але нема числа
             else:
                 logger.warning(f"Елемент помилки знайдено Selenium-ом, але BeautifulSoup його не бачить на {url}")
                 
@@ -980,9 +1007,10 @@ class NkonMonitor:
                 old_status = item.get('old_status')
                 price = item.get('price', 'N/A')
                 
+                status_map = {'preorder': 'Pre', 'in_stock': 'In', 'out_of_stock': 'Out'}
                 status_emoji = "✅" if new_status == 'in_stock' else "📦"
-                old_str = "Pre" if old_status == 'preorder' else "In"
-                new_str = "Pre" if new_status == 'preorder' else "In"
+                old_str = status_map.get(old_status, 'Out')
+                new_str = status_map.get(new_status, 'Out')
                 
                 if old_status != new_status:
                     status_info = f" | {old_str} → {new_str}"
@@ -1011,7 +1039,8 @@ class NkonMonitor:
             has_changes = True
             msg += f"❌ *Видалені ({len(changes['removed'])}):*\n"
             for item in changes['removed']:
-                msg += f"• [{item['capacity']}Ah] {self._shorten_name(item['name'])}\n"
+                link_text = f"[{item['capacity']}Ah]({item['link']})"
+                msg += f"• {link_text} {self._shorten_name(item['name'])}\n"
             msg += "\n"
             
         # Якщо змін немає, чи показувати повний список?
@@ -1215,11 +1244,15 @@ class NkonMonitor:
                 if target_items:
                     logger.info(f"Збір детальної інформації для {len(target_items)} товарів...")
                     for p in target_items:
-                        # 1. Дата доставки (тільки для preorder)
-                        if fetch_dates and p['stock_status'] == 'preorder':
+                        # 1. Дата доставки (шукаємо для ВСІХ товарів, щоб виявити прихований preorder)
+                        if fetch_dates:
                             date = self._fetch_delivery_date_details(p['link'], driver=driver)
                             if date:
                                 p['delivery_date'] = date
+                                # Якщо знайдена дата доставки, а каталог казав "in_stock" - виправляємо
+                                if p['stock_status'] == 'in_stock':
+                                    logger.info(f"Каталог вказав in_stock, але знайдено дату передзамовлення -> preorder")
+                                    p['stock_status'] = 'preorder'
                             else:
                                 # Fallback: якщо не вдалося отримати дату (сбій парсингу/мережі),
                                 # використовуємо попереднє відоме значення, щоб уникнути помилкових сповіщень.
@@ -1236,6 +1269,9 @@ class NkonMonitor:
                             stock = self._fetch_real_stock(p['link'], driver=driver)
                             if stock is not None:
                                 p['real_stock'] = stock
+                                if stock == 0:
+                                    logger.warning(f"⚠️ {p.get('capacity')}Ah: 0 шт на складі, статус -> out_of_stock")
+                                    p['stock_status'] = 'out_of_stock'
                             else:
                                 # Fallback для залишку (якщо збій Selenium або сайту)
                                 key = f"{p['link']}_{p.get('capacity', '0')}"
@@ -1251,6 +1287,10 @@ class NkonMonitor:
                         
                         if details:
                             logger.info(f"  📊 {p['capacity']}Ah | {self._shorten_name(p['name'])}: {', '.join(details)}")
+
+                # Фільтрація: залишаємо тільки наявні (або preorder) товари. 
+                # Товари з real_stock == 0 отримали статус out_of_stock вище і будуть відфільтровані.
+                products = [p for p in products if p['stock_status'] in ['in_stock', 'preorder']]
             
             if not products:
                 logger.warning("Не знайдено товарів, що відповідають критеріям")
