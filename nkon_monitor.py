@@ -783,7 +783,7 @@ class NkonMonitor:
         """
         Форматування повідомлення для Telegram
         """
-        msg = f"🔋 *NKON LiFePO4 Monitor*\n\n"
+        msg = f"[🔋 NKON LiFePO4 Monitor]({settings.MAIN_CHANNEL_URL})\n\n"
         
         has_changes = False
         threshold = self.config.get('price_alert_threshold', 5)
@@ -1280,7 +1280,7 @@ class NkonMonitor:
                         # Без змін - тихо редагувати
                         msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key)
                         if not msg_upd:
-                            msg_upd = f"🔋 *NKON Monitor*\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                            msg_upd = f"[🔋 NKON Monitor]({settings.MAIN_CHANNEL_URL})\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
                         
                         success = False
                         if last_nc_id and not dry_run:
