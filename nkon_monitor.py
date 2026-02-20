@@ -963,7 +963,7 @@ class NkonMonitor:
             'message_id': message_id,
             'text': text,
             'parse_mode': 'Markdown',
-            'disable_web_page_preview': False
+            'disable_web_page_preview': True
         }
         
         masked_chat = self._mask_sensitive(chat_id)
@@ -1030,7 +1030,7 @@ class NkonMonitor:
                 'chat_id': target_chat,
                 'text': message,
                 'parse_mode': 'Markdown',
-                'disable_web_page_preview': False,
+                'disable_web_page_preview': True,
                 'disable_notification': disable_notification
             }
             
