@@ -126,12 +126,21 @@ if ($manageRecipients -eq "y") {
         $recMinAh = Read-Host "  Custom Min Ah (default: $min_cap)"
         if ([string]::IsNullOrWhiteSpace($recMinAh)) { $recMinAh = [int]$min_cap } else { $recMinAh = [int]$recMinAh }
         
-        $recipient = [PSCustomObject]@{
+        $url = Read-Host "  Header Link URL (mandatory for first recipient, Enter to skip for others)"
+        if ([string]::IsNullOrWhiteSpace($url) -and $newRecipients.Count -eq 0) {
+            Write-Host "  Error: Header Link URL is required for the first recipient!" -ForegroundColor Red
+            continue
+        }
+        
+        $recipientProps = [ordered]@{
             chat_id         = $chatId
             type            = $type
             min_capacity_ah = $recMinAh
         }
-        if (-not [string]::IsNullOrWhiteSpace($thread)) { $recipient.thread_id = [int]$thread }
+        if (-not [string]::IsNullOrWhiteSpace($thread)) { $recipientProps['thread_id'] = [int]$thread }
+        if (-not [string]::IsNullOrWhiteSpace($url)) { $recipientProps['url'] = $url }
+        
+        $recipient = [PSCustomObject]$recipientProps
         
         $newRecipients += $recipient
         

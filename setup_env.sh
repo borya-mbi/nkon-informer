@@ -134,6 +134,13 @@ if [ "$manage" = "y" ]; then
         read -p "  Custom Min Ah (default: $min_cap): " recMinAh
         if [ -z "$recMinAh" ]; then recMinAh=$min_cap; fi
 
+        read -p "  Header Link URL (mandatory for first recipient, Enter to skip for others): " url
+        count=$(python3 -c "import json; print(len(json.loads('''$recipients_json''')))")
+        if [ -z "$url" ] && [ "$count" -eq 0 ]; then
+            echo -e "${RED}Header Link URL is required for the first recipient!${NC}"
+            continue
+        fi
+
         # Use Python to safely update the JSON array
         recipients_json=$(python3 -c "
 import json
@@ -145,6 +152,8 @@ new_rec = {
 }
 if '$thread':
     new_rec['thread_id'] = int('$thread')
+if '$url':
+    new_rec['url'] = '$url'
 data.append(new_rec)
 print(json.dumps(data, separators=(',', ':')))
 ")
