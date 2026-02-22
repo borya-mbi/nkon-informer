@@ -28,6 +28,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
 # Налаштування логування
@@ -381,11 +382,18 @@ class NkonMonitor:
                     )
                 except:
                     # Перевіримо, чи поле qty все ще 30000. Якщо воно скинулося в 1 - значить сайт щось зробив
-                    current_qty = qty_input.get_attribute('value')
+                    try:
+                        # qty_input може бути stale після AJAX, тому знаходимо заново
+                        qty_input_fresh = driver.find_element(By.NAME, "qty")
+                        current_qty = qty_input_fresh.get_attribute('value')
+                    except Exception:
+                        # Елемент взагалі відсутній — скоріш за все, сторінка оновилась або ми перейшли в кошик
+                        logger.warning(f"Повідомлення не з'явилося і qty перевірити не вдалося на {url}")
+                        return None
+                        
                     logger.warning(f"Повідомлення не з'явилося на {url}. Qty: {current_qty}")
-                    if current_qty != "30000":
-                        logger.info("Поле qty змінилося без повідомлення - вважаємо критичною помилкою наявності (0 шт)")
-                        return 0
+                    # НЕ повертаємо 0 — зміна qty на 1 може означати успішне додавання в кошик,
+                    # а не відсутність товару. Повертаємо None, щоб використати попередній залишок.
                     return None
             
             # 5. Парсинг тексту помилки
@@ -431,7 +439,10 @@ class NkonMonitor:
                 
             return None
         except Exception as e:
-            logger.error(f"Критична помилка при отриманні залишку для {url}: {e}", exc_info=True)
+            if isinstance(e, (StaleElementReferenceException, TimeoutException)):
+                logger.warning(f"Selenium timeout або stale елемент при отриманні залишку для {url}: {type(e).__name__}")
+            else:
+                logger.error(f"Критична помилка при отриманні залишку для {url}: {e}", exc_info=True)
             return None
     
 
@@ -482,8 +493,9 @@ class NkonMonitor:
         # \d{3,} - мінімум 3 цифри (автоматично фільтрує <100Ah)
         # \s* - будь-яка кількість пробілів
         # (?:...) - non-capturing group для всіх варіантів написання
-        pattern = r'(\d{3,})\s*(?:Ah|ah|AH|aH)'
-        match = re.search(pattern, text)
+        # Додаємо підтримку кириличного "Аг" та ігнорування регістру
+        pattern = r'(\d{3,})\s*(?:Ah|ah|AH|aH|Аг|аг|АГ|аГ)'
+        match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return int(match.group(1))
         return None
@@ -599,8 +611,8 @@ class NkonMonitor:
         Returns:
             'in_stock', 'preorder' або None (якщо out of stock)
         """
-        # Пошук кнопки Add to Cart
-        add_to_cart = item.find('button', class_='btn--cart')
+        # Пошук кнопки Add to Cart (більш гнучкий селектор)
+        add_to_cart = item.find('button', class_=lambda c: c and ('btn--cart' in c or 'btn-cart' in c))
         
         if not add_to_cart:
             return None  # Немає кнопки = out of stock
@@ -755,6 +767,9 @@ class NkonMonitor:
     def _format_stock_display(self, item, show_diffs: bool = True, msg_key: str = None) -> str:
         """Формує рядок залишку. Чисте читання - можна викликати багато разів."""
         if item.get('real_stock') is None:
+            # Якщо ми знаємо, що товар в наявності, але не знаємо скільки - показуємо статус
+            if item.get('stock_status') == 'in_stock':
+                return " `[В\u00a0наявності]`"
             return ""
             
         current = item['real_stock']
@@ -828,7 +843,12 @@ class NkonMonitor:
                     # Якщо раптом дати немає, але є залишок
                     status_ico += stock_msg
             elif item.get('stock_status') == 'in_stock':
-                status_ico = f" [✅In]({item['link']}){stock_msg}"
+                status_ico = f" [✅In]({item['link']})"
+                if stock_msg:
+                    # Бектіки не можна вкладати всередину посилання [...]() - використовуємо звичайний текст
+                    delivery_msg = f"\n  [{self.LINE_PREFIX} В\u00a0наявності]({item['link']})"
+                else:
+                    status_ico += stock_msg
             elif item.get('stock_status') == 'out_of_stock':
                 status_ico = f" ❌Out{stock_msg}"
                 
@@ -1098,6 +1118,35 @@ class NkonMonitor:
         
         return False, "silent"
 
+    def _calculate_auto_cooldown(self, heartbeat_times: list) -> float:
+        """
+        Розраховує автоматичний кулдаун на основі мінімальної відстані між слотами хартбіту.
+        """
+        if not heartbeat_times or len(heartbeat_times) < 1:
+            return 24.0
+        
+        if len(heartbeat_times) == 1:
+            return 24.0
+            
+        # Сортуємо для впевненості
+        sorted_times = sorted(heartbeat_times)
+        intervals = []
+        
+        # Інтервали між сусідніми слотами
+        for i in range(len(sorted_times) - 1):
+            t1 = sorted_times[i]
+            t2 = sorted_times[i+1]
+            diff = (t2.hour + t2.minute/60.0) - (t1.hour + t1.minute/60.0)
+            intervals.append(diff)
+            
+        # Інтервал через північ (останній до першого наступного дня)
+        t_first = sorted_times[0]
+        t_last = sorted_times[-1]
+        diff_midnight = (24.0 - (t_last.hour + t_last.minute/60.0)) + (t_first.hour + t_first.minute/60.0)
+        intervals.append(diff_midnight)
+        
+        return min(intervals)
+
     def run(self, dry_run: bool = False, force_notify: bool = False):
         """
         Основний цикл моніторингу
@@ -1179,8 +1228,10 @@ class NkonMonitor:
                                 if old_p and old_p.get('stock_status') == 'preorder' and old_p.get('delivery_date'):
                                     p['delivery_date'] = old_p['delivery_date']
                         
-                        # 2. Реальний залишок
-                        if effective_fetch_stock:
+                        # 2. Реальний залишок — тільки для preorder товарів.
+                        # Для in_stock ця перевірка зайва: сайт не повертає
+                        # кількість при успішному додаванні в кошик.
+                        if effective_fetch_stock and p['stock_status'] == 'preorder':
                             stock = self._fetch_real_stock(p['link'], driver=driver)
                             if stock is not None:
                                 p['real_stock'] = stock

@@ -12,6 +12,7 @@ test*
 fix_encoding.py
 close_issue*.ps1
 manage_issue_*.py
+diag_capacity.py
 _issue_*_tmp.md
 HANDOFF.md
 
@@ -68,3 +69,4 @@ docs/decisions/
 assets/*.excalidraw
 state do видаленя calb.json
 get_real_ids.py
+diag_capacity.py
