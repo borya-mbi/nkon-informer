@@ -261,85 +261,19 @@ class NkonMonitor:
             logger.warning(f"Не вдалося отримати дату доставки для {url}: {e}")
             return None
     
-    def _fetch_real_stock(self, url: str, driver) -> Optional[int]:
+    def _probe_qty(self, driver, qty: int) -> tuple:
         """
-        Отримання реальної кількості на складі через Selenium 
-        (шляхом введення 30000 в поле кількості)
+        Один пробний запит з qty.
+        Повертає: ('error', int), ('success', None), або ('silence', None).
         """
-        logger.info(f"Отримання реального залишку (Selenium): {url}")
-        
         try:
-            # Ми вже на сторінці якщо викликано після _fetch_delivery_date_details, 
-            # але для надійності перевіримо URL або просто завантажимо
-            if driver.current_url != url:
-                driver.get(url)
-                
-            # 1. Обробка обов'язкових випадаючих списків (dropdowns)
-            # Деякі товари (наприклад, Eve MB31) вимагають вибору опцій (Busbars)
-            try:
-                # Шукаємо всі видимі select-елементи, які можуть бути обов'язковими
-                selects = driver.find_elements(By.CSS_SELECTOR, "select.super-attribute-select, select.required-entry, select[id^='select_']")
-                for selector in selects:
-                    if selector.is_displayed():
-                        from selenium.webdriver.support.ui import Select
-                        s = Select(selector)
-                        # Перевіряємо, чи вже вибрано щось (окрім дефолтного "Choose an Option")
-                        if not s.first_selected_option or s.first_selected_option.get_attribute('value') == "":
-                            # Логуємо всі доступні опції для діагностики
-                            for idx, opt in enumerate(s.options):
-                                logger.info(f"  Опція [{idx}]: '{opt.text}' (value='{opt.get_attribute('value')}')")
-                            
-                            # 1.1 Пошук пріоритетних опцій (із шинами/busbars)
-                            # УВАГА: додаємо 'так'/'yes', бо іноді варіанти просто 'Ні' та 'Так'
-                            priority_keywords = ['busbar', 'шини', 'шин', 'так', 'yes']
-                            negative_patterns = [r'\bні\b', r'\bбез\b', r'\bno\b', r'\bnone\b', r'не потрібні']
-                            
-                            target_idx = None
-                            
-                            # Спроба знайти найкращий варіант (із шинами)
-                            for i in range(1, len(s.options)):
-                                opt_text = s.options[i].text.lower()
-                                val = s.options[i].get_attribute('value')
-                                if not val: continue
-                                
-                                # Якщо містить ключові слова І НЕ містить заперечень
-                                if any(kw in opt_text for kw in priority_keywords):
-                                    if not any(re.search(pat, opt_text) for pat in negative_patterns):
-                                        logger.info(f"Знайдено пріоритетну опцію: {s.options[i].text}")
-                                        target_idx = i
-                                        break
-                            
-                            # Якщо пріоритет не знайдено, просто беремо першу доступну
-                            if target_idx is None:
-                                logger.info("Пріоритетну опцію не знайдено, обираємо першу доступну")
-                                for i in range(1, len(s.options)):
-                                    if s.options[i].get_attribute('value'):
-                                        target_idx = i
-                                        break
-                            
-                            if target_idx is not None:
-                                logger.info(f"Вибір опції: {s.options[target_idx].text}")
-                                s.select_by_index(target_idx)
-                                time.sleep(0.5) # Пауза для оновлення ціни/стану
-
-            except Exception as e:
-                logger.warning(f"Помилка при спробі вибрати опції на {url}: {e}")
-
-            # 2. Очікування та заповнення поля qty
-            try:
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.NAME, "qty"))
-                )
-            except:
-                logger.warning(f"Поле 'qty' не знайдено на {url}")
-                return None
-            
             qty_input = driver.find_element(By.NAME, "qty")
             qty_input.clear()
-            qty_input.send_keys("30000")
-            time.sleep(1) # Пауза, щоб сайт "захопив" нове число
+            qty_input.send_keys(str(qty))
+            # Пауза, щоб сайт "захопив" нове число перед кліком
+            time.sleep(0.5)
             
-            # 3. Пошук кнопки Add to Cart / Pre Order
+            # Пошук кнопки Add to Cart / Pre Order
             button_selectors = ["button.tocart", "button.btn--cart", ".action.primary.tocart"]
             cart_button = None
             for selector in button_selectors:
@@ -355,94 +289,244 @@ class NkonMonitor:
                     continue
             
             if not cart_button:
-                logger.warning(f"Не знайдено активну кнопку додавання в кошик на {url}")
-                return None
+                return ('silence', None)
                 
-            # Клікаємо JS-ом для надійності, якщо звичайний клік перекрито чимось
+            # Видалення старих повідомлень із DOM перед кліком
+            driver.execute_script("""
+                document.querySelectorAll('.message-error, .mage-error, .message.error, .message-success, .message.success').forEach(el => el.remove());
+            """)
+                
+            # Клікаємо JS-ом для надійності
             try:
                 cart_button.click()
             except:
                 driver.execute_script("arguments[0].click();", cart_button)
-            
-            # 4. Очікування повідомлення помилки
-            error_selector = ".message-error, .mage-error, .message.error, .message-success"
-            
-            # Спершу перевіримо, чи помилка ВЖЕ є (наприклад, від попереднього разу)
-            def find_error():
-                try:
-                    return driver.find_elements(By.CSS_SELECTOR, error_selector)
-                except:
-                    return []
 
-            # Якщо помилки нема, чекаємо
-            if not find_error():
-                try:
-                    WebDriverWait(driver, 12).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, error_selector))
-                    )
-                except:
-                    # Перевіримо, чи поле qty все ще 30000. Якщо воно скинулося в 1 - значить сайт щось зробив
-                    try:
-                        # qty_input може бути stale після AJAX, тому знаходимо заново
-                        qty_input_fresh = driver.find_element(By.NAME, "qty")
-                        current_qty = qty_input_fresh.get_attribute('value')
-                    except Exception:
-                        # Елемент взагалі відсутній — скоріш за все, сторінка оновилась або ми перейшли в кошик
-                        logger.warning(f"Повідомлення не з'явилося і qty перевірити не вдалося на {url}")
-                        return None
-                        
-                    logger.warning(f"Повідомлення не з'явилося на {url}. Qty: {current_qty}")
-                    # НЕ повертаємо 0 — зміна qty на 1 може означати успішне додавання в кошик,
-                    # а не відсутність товару. Повертаємо None, щоб використати попередній залишок.
-                    return None
-            
-            # 5. Парсинг тексту помилки
-            # ВАЖЛИВО: беремо ОСТАННІЙ елемент помилки, бо на сторінці можуть 
-            # залишатись повідомлення від попередніх товарів (Magento кешує)
+            # Очікування відповіді (error або success)
+            response_selector = ".message-error, .mage-error, .message.error, .message-success"
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, response_selector))
+                )
+            except (TimeoutException, StaleElementReferenceException):
+                return ('silence', None)
+
+            # Аналіз результату за допомогою BeautifulSoup
             soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            # 1. Пошук помилки (Error)
+            error_selector = ".message-error, .mage-error, .message.error"
             error_elems = soup.select(error_selector)
-            error_elem = error_elems[-1] if error_elems else None
-            if error_elem:
-                text = error_elem.get_text(strip=True)
-                logger.info(f"Знайдено {len(error_elems)} помилок на сторінці, беремо останню: '{text[:80]}...'")
-                # "The most you can purchase is 10928" або "only 10928 left"
-                # Додаємо підтримку різних форматів повідомлень NKON
+            if error_elems:
+                text = error_elems[-1].get_text(strip=True)
                 patterns = [
                     r'only\s+(\d+)\s+left',
                     r'most\s+you\s+can\s+purchase\s+is\s+(\d+)',
                     r'максимальна\s+кількість\s+.*?\s+(\d+)',
                     r'залишилося\s+лише\s+(\d+)'
                 ]
-                
                 for pattern in patterns:
                     match = re.search(pattern, text, re.IGNORECASE)
                     if match:
-                        stock_val = int(match.group(1))
-                        logger.info(f"✅ Знайдено реальний залишок: {stock_val}")
-                        return stock_val
+                        return ('error', int(match.group(1)))
                 
-                # Специфічні фрази для нульового залишку
+                # Специфічні фрази для нульового залишку (тільки явна відсутність)
                 zero_stock_patterns = [
-                    r'немає в наявності',
-                    r'not available',
-                    r'not in stock',
                     r'out of stock'
                 ]
                 if any(re.search(p, text, re.IGNORECASE) for p in zero_stock_patterns):
-                    logger.warning(f"Знайдено повідомлення про відсутність товару (0 шт): '{text}'")
-                    return 0
+                    # "The requested qty is not available"
+                    # означає "ви запитали більше ніж є", а НЕ "товар відсутній"
+                    if "requested qty" not in text.lower():
+                        return ('error', 0)
                 
-                logger.warning(f"Помилка знайдена, але кількість не розпізнана: '{text}' (URL: {url})")
-                return 0 # Вважаємо 0, якщо є помилка наявності, але нема числа
+                # Помилка є, але кількість не розпізнана
+                # Перевіряємо на відомі фрази "недоступної кількості"
+                unavailable_patterns = [
+                    r'запитаної кількості немає в наявності',
+                    r'requested qty is not available',
+                    r'requested quantity is not available'
+                ]
+                if any(re.search(p, text, re.IGNORECASE) for p in unavailable_patterns):
+                    return ('silence', None)
+
+                # Також перевіряємо на "Обов’язкове поле"
+                if "обов’язкове поле" in text.lower() or "required field" in text.lower():
+                    return ('reselect', None)
+
+                logger.warning(f"  ⚠️ Нерозпізнана помилка (трактуємо як silence): '{text[:100]}'")
+                return ('silence', None) 
+
+            # 2. Пошук успіху (ТІЛЬКИ явне повідомлення про додавання до кошика)
+            success_selector = ".message-success"
+            success_elems = soup.select(success_selector)
+            if success_elems:
+                success_text = success_elems[-1].get_text(strip=True).lower()
+                # Перевіряємо, що це саме повідомлення про додавання (відсіює застарілі повідомлення)
+                add_keywords = ['added', 'додано', 'shopping cart', 'кошик']
+                if any(kw in success_text for kw in add_keywords):
+                    return ('success', None)
+                else:
+                    logger.debug(f"  🔍 Проігноровано нецільовий success: '{success_text[:80]}'")
+
+            return ('silence', None)
+            
+        except (TimeoutException, StaleElementReferenceException):
+            return ('silence', None)
+        except Exception as e:
+            msg = str(e).split('\n')[0]
+            logger.warning(f"Помилка при пробному запиті qty={qty}: {msg}")
+            return ('silence', None)
+
+    def _fetch_real_stock(self, url: str, driver, prev_stock: int = None) -> Optional[int]:
+        """
+        Адаптивне отримання реальної кількості на складі через Selenium.
+        Використовує метод дихотомії (бінарного пошуку) у зоні невідомості.
+        """
+        logger.info(f"Отримання реального залишку (Адаптивно): {url}")
+        
+        try:
+            if driver.current_url != url:
+                driver.get(url)
+                
+            def select_options():
+                try:
+                    selects = driver.find_elements(By.CSS_SELECTOR, "select.super-attribute-select, select.required-entry, select[id^='select_']")
+                    for selector in selects:
+                        if selector.is_displayed():
+                            from selenium.webdriver.support.ui import Select
+                            s = Select(selector)
+                            if not s.first_selected_option or s.first_selected_option.get_attribute('value') == "":
+                                priority_keywords = ['busbar', 'шини', 'шин', 'так', 'yes']
+                                negative_patterns = [r'\bні\b', r'\bбез\b', r'\bno\b', r'\bnone\b', r'не потрібні']
+                                target_idx = None
+                                for i in range(1, len(s.options)):
+                                    opt_text = s.options[i].text.lower()
+                                    if any(kw in opt_text for kw in priority_keywords):
+                                        if not any(re.search(pat, opt_text) for pat in negative_patterns):
+                                            target_idx = i
+                                            break
+                                if target_idx is None:
+                                    for i in range(1, len(s.options)):
+                                        if s.options[i].get_attribute('value'):
+                                            target_idx = i
+                                            break
+                                if target_idx is not None:
+                                    s.select_by_index(target_idx)
+                                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Помилка при спробі вибрати опції на {url}: {str(e).splitlines()[0]}")
+
+            select_options()
+
+            # 2. Очікування поля qty
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.NAME, "qty"))
+                )
+            except:
+                logger.warning(f"Поле 'qty' не знайдено на {url}")
+                return None
+
+            # 3. Адаптивний пошук (Midpoint Search)
+            INITIAL_PROBE = 30000
+            MAX_ITERATIONS = 12
+            
+            # prev_stock — це лише підказка для першої проби, НЕ підтверджений успіх
+            last_success = 0
+            if prev_stock and prev_stock > 0:
+                qty = prev_stock
             else:
-                logger.warning(f"Елемент помилки знайдено Selenium-ом, але BeautifulSoup його не бачить на {url}")
+                qty = INITIAL_PROBE
+            
+            last_silence = None
+            
+            for i in range(MAX_ITERATIONS):
+                if qty < 1: qty = 1
+                
+                logger.info(f"  [iter {i+1}/{MAX_ITERATIONS}] qty={qty}, "
+                             f"last_success={last_success}, last_silence={last_silence}")
+                
+                state, val = self._probe_qty(driver, qty)
+                
+                if state == 'error':
+                    # Якщо ми розпізнали конкретне число - це і є залишок 
+                    if last_success > 0 and val < last_success:
+                        logger.info(f"  📌 ERROR '{val}' точніше за попередній SUCCESS '{last_success}'")
+                    logger.info(f"  ✅ Знайдено реальний залишок (limit): {val}")
+                    return val
+                elif state == 'reselect':
+                    logger.warning(f"  🔄 Скидання опцій! Пробую вибрати ще раз...")
+                    select_options()
+                    # Не зараховуємо як ітерацію або пробуємо ту саму кількість ще раз
+                    state, val = self._probe_qty(driver, qty)
+                    if state == 'success':
+                        last_success = qty
+                        if last_silence is not None:
+                            qty = int((last_success + last_silence) / 2)
+                        else:
+                            qty = int(qty * 2)
+                    elif state == 'error':
+                        return val
+                    else:
+                        last_silence = qty
+                        qty = int((last_success + last_silence) / 2)
+                elif state == 'success':
+                    last_success = qty
+                    logger.info(f"  👍 {qty} доступно. Шукаємо БІЛЬШЕ...")
+                    if last_silence is not None:
+                        qty = int((last_success + last_silence) / 2)
+                    else:
+                        qty = int(qty * 2)
+                else:  # silence
+                    last_silence = qty
+                    logger.info(f"  👎 {qty} забагато. Шукаємо МЕНШЕ...")
+                    qty = int((last_success + last_silence) / 2)
+                
+                # Перевірка збіжності
+                if last_silence is not None and (last_silence - last_success) < 10:
+                    logger.info(f"  📊 Збіжність: [{last_success}, {last_silence}]")
+                    break
+                
+                # Оптимізація: якщо вже маємо більше 30к і це 5-та ітерація без ERROR
+                if i >= 4 and last_success >= 30000 and state == 'success':
+                    logger.info(f"  🚀 Достатньо великий залишок (>30к), завершуємо ітерації")
+                    break
+
+                # Після SUCCESS — очистити кошик, щоб наступна проба була з чистого аркуша
+                if state == 'success':
+                    try:
+                        logger.info(f"  🛒 Очищення кошика після успіху (видаляємо {last_success} шт.)...")
+                        driver.get("https://www.nkon.nl/ua/checkout/cart/")
+                        time.sleep(1)
+                        # Видаляємо всі товари з кошика
+                        delete_btns = driver.find_elements(By.CSS_SELECTOR, ".action.action-delete")
+                        for btn in delete_btns:
+                            try:
+                                btn.click()
+                                time.sleep(0.5)
+                            except:
+                                pass
+                        # Повертаємося на сторінку товару
+                        driver.get(url)
+                        time.sleep(1)
+                        select_options()
+                    except Exception as e:
+                        logger.warning(f"  Не вдалося очистити кошик: {str(e).splitlines()[0]}")
+                        try:
+                            driver.get(url)
+                            time.sleep(1)
+                        except:
+                            pass
+
+            if last_success > 0:
+                logger.info(f"  📊 Наближений залишок (без ERROR): {last_success}")
+                return last_success
                 
             return None
+            
         except Exception as e:
-            if isinstance(e, (StaleElementReferenceException, TimeoutException)):
-                logger.warning(f"Selenium timeout або stale елемент при отриманні залишку для {url}: {type(e).__name__}")
-            else:
-                logger.error(f"Критична помилка при отриманні залишку для {url}: {e}", exc_info=True)
+            logger.error(f"Помилка при адаптивному отриманні залишку для {url}: {e}")
             return None
     
 
@@ -845,8 +929,8 @@ class NkonMonitor:
             elif item.get('stock_status') == 'in_stock':
                 status_ico = f" [✅In]({item['link']})"
                 if stock_msg:
-                    # Бектіки не можна вкладати всередину посилання [...]() - використовуємо звичайний текст
-                    delivery_msg = f"\n  [{self.LINE_PREFIX} В\u00a0наявності]({item['link']})"
+                    # Додаємо кількість для In Stock
+                    delivery_msg = f"\n  [{self.LINE_PREFIX} В\u00a0наявності]({item['link']}){stock_msg}"
                 else:
                     status_ico += stock_msg
             elif item.get('stock_status') == 'out_of_stock':
@@ -1228,19 +1312,20 @@ class NkonMonitor:
                                 if old_p and old_p.get('stock_status') == 'preorder' and old_p.get('delivery_date'):
                                     p['delivery_date'] = old_p['delivery_date']
                         
-                        # 2. Реальний залишок — тільки для preorder товарів.
-                        # Для in_stock ця перевірка зайва: сайт не повертає
-                        # кількість при успішному додаванні в кошик.
-                        if effective_fetch_stock and p['stock_status'] == 'preorder':
-                            stock = self._fetch_real_stock(p['link'], driver=driver)
+                        # 2. Реальний залишок — адаптивний пошук для preorder та in_stock товарів.
+                        if effective_fetch_stock and p['stock_status'] in ('preorder', 'in_stock'):
+                            key = f"{p['link']}_{p.get('capacity', '0')}"
+                            old_p = self.previous_state.get(key)
+                            prev_stock = old_p.get('real_stock') if old_p else None
+                            
+                            stock = self._fetch_real_stock(p['link'], driver=driver, prev_stock=prev_stock)
                             if stock is not None:
                                 p['real_stock'] = stock
                                 if stock == 0:
                                     logger.warning(f"  ⚠️ {p.get('capacity')}Ah: 0 шт на складі, статус -> out_of_stock")
                                     p['stock_status'] = 'out_of_stock'
                             else:
-                                key = f"{p['link']}_{p.get('capacity', '0')}"
-                                old_p = self.previous_state.get(key)
+                                # Якщо не вдалося отримати новий, зберігаємо старий (якщо був)
                                 if old_p and old_p.get('real_stock') is not None:
                                     p['real_stock'] = old_p['real_stock']
             
