@@ -132,6 +132,8 @@ if ($manageRecipients -eq "y") {
             continue
         }
         
+        $name = Read-Host "  Name for footer (optional, e.g. Канал)"
+        
         $recipientProps = [ordered]@{
             chat_id         = $chatId
             type            = $type
@@ -139,6 +141,7 @@ if ($manageRecipients -eq "y") {
         }
         if (-not [string]::IsNullOrWhiteSpace($thread)) { $recipientProps['thread_id'] = [int]$thread }
         if (-not [string]::IsNullOrWhiteSpace($url)) { $recipientProps['url'] = $url }
+        if (-not [string]::IsNullOrWhiteSpace($name)) { $recipientProps['name'] = $name }
         
         $recipient = [PSCustomObject]$recipientProps
         

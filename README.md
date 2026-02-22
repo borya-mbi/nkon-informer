@@ -169,7 +169,9 @@ python nkon_monitor.py
 
 ### Змінні:
 - `TELEGRAM_BOT_TOKEN`: Токен бота від @BotFather.
-- `TELEGRAM_CONFIG_JSON`: Основне налаштування отримувачів. Формат: list of dicts `[{"chat_id": "...", "type": "changes", "min_capacity_ah": 280, "thread_id": 123}, ...]`.
+- `TELEGRAM_CONFIG_JSON`: Основне налаштування отримувачів. Формат: list of dicts `[{"chat_id": "...", "type": "changes", "min_capacity_ah": 280, "thread_id": 123, "url": "https://t.me/...", "name": "Канал"}, ...]`.
+    - `url` (optional): Посилання на канал/групу для розділу "Обговорення".
+    - `name` (optional): Текстова назва посилання (наприклад, "Канал" або "Борис"). Якщо не вказано, використовується "Чат".
 - `QUIET_HOURS_START` / `QUIET_HOURS_END`: Години "тихого режиму" (без звуку). Наприклад, `21` та `8`.
 - `NKON_URL`: URL сторінки для моніторингу.
 - `HEARTBEAT_TIMES`: Часи планових сповіщень (наприклад, `8:00,12:00,16:00`).

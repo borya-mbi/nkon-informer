@@ -141,6 +141,8 @@ if [ "$manage" = "y" ]; then
             continue
         fi
 
+        read -p "  Name for footer (optional, e.g. Канал): " name
+
         # Use Python to safely update the JSON array
         recipients_json=$(python3 -c "
 import json
@@ -154,6 +156,8 @@ if '$thread':
     new_rec['thread_id'] = int('$thread')
 if '$url':
     new_rec['url'] = '$url'
+if '$name':
+    new_rec['name'] = '$name'
 data.append(new_rec)
 print(json.dumps(data, separators=(',', ':')))
 ")

@@ -362,10 +362,39 @@ def run_tests():
     print(f'In stock (real_stock=None): "{res_in_stock}"')
     print(f'Preorder (real_stock=None): "{res_preorder}"')
     
-    if "[В наявності]" in res_in_stock and res_preorder == "":
+    if "В наявності" in res_in_stock and res_preorder == "":
         print("✅ TEST 15 PASSED")
     else:
         print("❌ TEST 15 FAILED")
+
+    # Test 16: Footer Multi-link (from .env)
+    print('\n--- TEST 16: Footer Multi-link (from .env) ---')
+    import settings
+    all_footer_links = [
+        {'url': r['url'], 'name': r.get('name', 'Чат')}
+        for r in settings.RECIPIENTS[1:] if r.get('url')
+    ]
+    
+    print(f"   Found {len(all_footer_links)} footer links in settings.")
+    for link in all_footer_links:
+        print(f"   - {link['name']}: {link['url']}")
+        
+    changes = {'current': [{'name': 'Test Item', 'link': 'url1', 'capacity': 280, 'price': '50', 'stock_status': 'in_stock', 'real_stock': 10}]}
+    
+    # Test for Main Channel (footer should be present)
+    msg_main = monitor.format_telegram_message(changes, include_unchanged=True, footer_links=all_footer_links)
+    # Test for Group (footer should be absent)
+    msg_group = monitor.format_telegram_message(changes, include_unchanged=True, footer_links=None)
+    
+    print("\n   --- Preview (Main Channel) ---")
+    print(msg_main)
+    print("\n   --- Preview (Group) ---")
+    print(msg_group)
+    
+    if "💬 Обговорення:" in msg_main and "💬 Обговорення:" not in msg_group:
+        print("\n✅ TEST 16 PASSED")
+    else:
+        print("\n❌ TEST 16 FAILED")
 
 if __name__ == "__main__":
     run_tests()

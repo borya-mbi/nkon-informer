@@ -878,7 +878,7 @@ class NkonMonitor:
             
         return f" `[{current} шт]`"
 
-    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False, unchanged_header: str = "Без змін", msg_key: str = None, header_link: str = None, footer_link: str = None) -> Optional[str]:
+    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False, unchanged_header: str = "Без змін", msg_key: str = None, header_link: str = None, footer_links: list = None) -> Optional[str]:
         """
         Форматування повідомлення для Telegram
         """
@@ -1048,8 +1048,14 @@ class NkonMonitor:
         msg = msg.strip()
         status_emoji = "🆕" if not is_update else "🔄"
         msg += f"\n\n{status_emoji} {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
-        if footer_link:
-            msg += f" [💬 Обговорення]({footer_link})"
+        # Формування футера з декількох посилань у форматі "💬 Обговорення: Канал | Борис"
+        if footer_links:
+            links_list = [
+                f"[{link.get('name', 'Чат')}]({link['url']})"
+                for link in footer_links if link.get('url')
+            ]
+            if links_list:
+                msg += f"\n\n💬 Обговорення: " + " | ".join(links_list)
         return msg
 
     
@@ -1345,8 +1351,11 @@ class NkonMonitor:
 
             # Визначаємо URL головного каналу (з першого реципієнта)
             main_channel_url = settings.RECIPIENTS[0].get('url') if settings.RECIPIENTS else None
-            # Визначаємо URL групи обговорення (з другого реципієнта, якщо є)
-            discussion_group_url = settings.RECIPIENTS[1].get('url') if len(settings.RECIPIENTS) > 1 else None
+            # Збір всіх посилань для футера (всі, крім першого - головного каналу)
+            all_footer_links = [
+                {'url': r['url'], 'name': r.get('name', 'Чат')}
+                for r in settings.RECIPIENTS[1:] if r.get('url')
+            ]
 
             logger.info(f"Початок розсилки для {len(settings.RECIPIENTS)} отримувачів...")
             
@@ -1358,8 +1367,8 @@ class NkonMonitor:
                 # Logic: Smart Header
                 header_link = main_channel_url if i > 0 else None
                 
-                # Logic: Footer Link (тільки для головного каналу, посилання на групу)
-                footer_link = discussion_group_url if i == 0 else None
+                # Footer Links: посилання тільки для головного каналу (i == 0)
+                footer_links = all_footer_links if i == 0 else None
                 
                 # Ключ для відстеження повідомлень: chat_id_threadID щоб уникнути конфліктів у топіках
                 msg_key = f"{chat_id}_{thread_id}" if thread_id else chat_id
@@ -1374,7 +1383,7 @@ class NkonMonitor:
                 
                 # 1. Повні звіти
                 if rpt_type == 'full':
-                    msg_full = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=False, msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                    msg_full = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                     if msg_full:
                         sent = self.send_telegram_message(msg_full, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run)
                         if chat_id in sent:
@@ -1382,7 +1391,7 @@ class NkonMonitor:
                 
                 # 2. Звіти про зміни
                 elif rpt_type == 'changes':
-                    msg_ch = self.format_telegram_message(rec_changes, include_unchanged=False, is_update=False, msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                    msg_ch = self.format_telegram_message(rec_changes, include_unchanged=False, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                     should_notify, reason = self._should_notify(bool(msg_ch))
                     if force_notify:
                         should_notify, reason = True, "force-notify"
@@ -1393,7 +1402,7 @@ class NkonMonitor:
                     if msg_ch:
                         # Зафіксувати дельти у старому повідомленні
                         if last_nc_id and not dry_run:
-                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                             self.edit_telegram_message(chat_id, last_nc_id, msg_upd)
                         
                         # Скидаємо лічильники ТІЛЬКИ ПІСЛЯ оновлення старого (як контрольна точка)
@@ -1408,7 +1417,7 @@ class NkonMonitor:
                         
                         # Новий стан (тихо)
                         no_changes_only = {'new': [], 'removed': [], 'price_changes': [], 'status_changes': [], 'current': rec_changes['current']}
-                        msg_ns = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                        msg_ns = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                         sent_st = self.send_telegram_message(msg_ns, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=True)
                         if chat_id in sent_st:
                             active_no_changes[msg_key] = sent_st[chat_id]
@@ -1416,14 +1425,14 @@ class NkonMonitor:
                     elif reason == "heartbeat" or reason == "force-notify":
                         logger.info(f"🔔 Heartbeat/Force для {msg_key}")
                         if last_nc_id and not dry_run:
-                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                             self.edit_telegram_message(chat_id, last_nc_id, msg_upd)
                         
                         self.stock_cumulative_diffs[msg_key] = {}
                         if not dry_run: time.sleep(2)
                         
                         no_changes_only = {'new': [], 'removed': [], 'price_changes': [], 'status_changes': [], 'current': rec_changes['current']}
-                        msg_hb = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                        msg_hb = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                         sent_hb = self.send_telegram_message(msg_hb, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=False)
                         self.last_notification_time = datetime.now()
                         if chat_id in sent_hb:
@@ -1431,15 +1440,20 @@ class NkonMonitor:
                     
                     else:
                         # Без змін - тихо редагувати
-                        msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_link=footer_link)
+                        msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
                         if not msg_upd:
                             if header_link:
                                 msg_upd = f"[🔋 NKON Monitor]({header_link})\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
                             else:
                                 msg_upd = f"🔋 *NKON Monitor*\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
                             
-                            if footer_link:
-                                msg_upd += f" [💬 Обговорення]({footer_link})"
+                            if footer_links:
+                                links_list = [
+                                    f"[{link.get('name', 'Чат')}]({link['url']})"
+                                    for link in footer_links if link.get('url')
+                                ]
+                                if links_list:
+                                    msg_upd += f"\n\n💬 Обговорення: " + " | ".join(links_list)
                         
                         success = False
                         if last_nc_id and not dry_run:
