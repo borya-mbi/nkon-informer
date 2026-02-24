@@ -396,5 +396,28 @@ def run_tests():
     else:
         print("\n❌ TEST 16 FAILED")
 
+    # Test 17: Grade Extraction (Cyrillic & Latin)
+    print('\n--- TEST 17: Grade Extraction (Cyrillic & Latin) ---')
+    grade_cases = [
+        ('Eve LF230 230Аг 3.2В Група А', 'Grade A'),
+        ('Eve LF280K Grade A 280Ah', 'Grade A'),
+        ('REPT Grade B 324Ah', 'Grade B'),
+        ('Eve LF334 Клас A 334Ah', 'Grade A'),
+        ('Eve LF230 No Grade', '?'),
+        ('Група Б Battery', 'Grade B')
+    ]
+    
+    passed_17 = True
+    for test_text, expected in grade_cases:
+        res = monitor._extract_grade(test_text)
+        status = "✅" if res == expected else "❌"
+        if res != expected: passed_17 = False
+        print(f'{status} "{test_text}" -> {res} (expected {expected})')
+        
+    if passed_17:
+        print("✅ TEST 17 PASSED")
+    else:
+        print("❌ TEST 17 FAILED")
+
 if __name__ == "__main__":
     run_tests()

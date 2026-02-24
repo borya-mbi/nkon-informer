@@ -794,7 +794,7 @@ class NkonMonitor:
         Підтримує англійську (Grade) та українську (Клас) версії
         """
         # Grade A, Grade A-, Клас A, Група A, B-Grade тощо
-        match = re.search(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-B][-+]?|[A-B]-Grade)', text)
+        match = re.search(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-BА-Б][-+]?|[A-BА-Б]-Grade)', text)
         if match:
             grade = match.group(0)
             # Нормалізація: B-Grade -> Grade B
@@ -802,6 +802,8 @@ class NkonMonitor:
                 return f"Grade {grade[0]}"
             # Клас A -> Grade A, Група A -> Grade A
             grade = re.sub(r'(?i)(Клас|Група)', 'Grade', grade)
+            # Нормалізація літер (Кирилиця А/Б -> Латиниця A/B)
+            grade = grade.replace('А', 'A').replace('Б', 'B')
             grade = grade.title()  # grade a -> Grade A
             return grade
         return "?"
@@ -813,7 +815,7 @@ class NkonMonitor:
         """
         # 1. Видаляємо грейд (бо ми його показуємо окремо)
         # Підтримка Grade/Клас/Група
-        text = re.sub(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-B][-+]?|[A-B]-Grade)', '', text)
+        text = re.sub(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-BА-Б][-+]?|[A-BА-Б]-Grade)', '', text)
         
         # 2. Видаляємо технічні характеристики (бо вони зрозумілі з контексту)
         remove_words = [
