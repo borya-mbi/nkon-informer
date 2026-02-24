@@ -15,8 +15,29 @@ NC='\033[0m' # No Color
 get_current_value() {
     local key=$1
     if [ -f ".env" ]; then
-        # Handle quoted values in .env
-        local value=$(grep "^${key}=" .env | cut -d '=' -f2- | sed "s/^'//;s/'$//" | tr -d '\r')
+        # Use Python to reliably read .env (handles quoted values)
+        local value=$(RKEY="$key" python3 -c "
+import os
+key = os.environ['RKEY']
+try:
+    from dotenv import dotenv_values
+    vals = dotenv_values('.env')
+    v = vals.get(key, '')
+    if v:
+        print(v)
+except ImportError:
+    # Fallback: simple line-based parsing
+    with open('.env', 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(key + '='):
+                val = line.split('=', 1)[1]
+                if (val.startswith(\"'\") and val.endswith(\"'\")) or (val.startswith('\"') and val.endswith('\"')):
+                    print(val[1:-1])
+                else:
+                    print(val)
+                break
+" 2>/dev/null | tr -d '\r')
         if [ -n "$value" ]; then
             echo "$value"
             return
@@ -100,7 +121,7 @@ recipients_json="[]"
 
 if [ -n "$current_json" ]; then
     recipients_json="$current_json"
-    count=$(python3 -c "import json; print(len(json.loads('''$recipients_json''')))")
+    count=$(RJSON="$recipients_json" python3 -c "import json,os; print(len(json.loads(os.environ['RJSON'])))")
     echo -e "${GRAY}Found $count existing recipients.${NC}"
 fi
 
@@ -118,7 +139,7 @@ if [ "$manage" = "y" ]; then
         echo -e "\n${GRAY}--- Adding Recipient ---${NC}"
         read -p "  Chat ID (required, use -100xxx for channels/groups): " chatId
         if [ -z "$chatId" ]; then
-            count=$(python3 -c "import json; print(len(json.loads('''$recipients_json''')))")
+            count=$(RJSON="$recipients_json" python3 -c "import json,os; print(len(json.loads(os.environ['RJSON'])))")
             if [ "$count" -eq 0 ]; then
                 echo -e "${RED}Chat ID is required!${NC}"
                 continue
@@ -135,7 +156,7 @@ if [ "$manage" = "y" ]; then
         if [ -z "$recMinAh" ]; then recMinAh=$min_cap; fi
 
         read -p "  Header Link URL (mandatory for first recipient, Enter to skip for others): " url
-        count=$(python3 -c "import json; print(len(json.loads('''$recipients_json''')))")
+        count=$(RJSON="$recipients_json" python3 -c "import json,os; print(len(json.loads(os.environ['RJSON'])))")
         if [ -z "$url" ] && [ "$count" -eq 0 ]; then
             echo -e "${RED}Header Link URL is required for the first recipient!${NC}"
             continue
@@ -144,20 +165,31 @@ if [ "$manage" = "y" ]; then
         read -p "  Name for footer (optional, e.g. Канал): " name
 
         # Use Python to safely update the JSON array
-        recipients_json=$(python3 -c "
-import json
-data = json.loads('''$recipients_json''')
+        recipients_json=$(
+            RJSON="$recipients_json" \
+            R_CHAT="$chatId" \
+            R_TYPE="$type" \
+            R_MIN="$recMinAh" \
+            R_THREAD="$thread" \
+            R_URL="$url" \
+            R_NAME="$name" \
+            python3 -c "
+import json, os
+data = json.loads(os.environ['RJSON'])
 new_rec = {
-    'chat_id': '$chatId',
-    'type': '$type',
-    'min_capacity_ah': int('$recMinAh')
+    'chat_id': os.environ['R_CHAT'],
+    'type': os.environ['R_TYPE'],
+    'min_capacity_ah': int(os.environ['R_MIN'])
 }
-if '$thread':
-    new_rec['thread_id'] = int('$thread')
-if '$url':
-    new_rec['url'] = '$url'
-if '$name':
-    new_rec['name'] = '$name'
+t = os.environ.get('R_THREAD', '')
+if t:
+    new_rec['thread_id'] = int(t)
+u = os.environ.get('R_URL', '')
+if u:
+    new_rec['url'] = u
+n = os.environ.get('R_NAME', '')
+if n:
+    new_rec['name'] = n
 data.append(new_rec)
 print(json.dumps(data, separators=(',', ':')))
 ")
