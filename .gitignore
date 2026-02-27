@@ -11,7 +11,6 @@ test*
 # Скрипти та утиліти (локальні)
 fix_encoding.py
 close_issue*.ps1
-manage_issue_*.py
 diag_capacity.py
 _issue_*_tmp.md
 HANDOFF.md
@@ -60,6 +59,7 @@ Thumbs.db
 
 # Project Assets (Keep heavy originals local only)
 assets/*.png
+issues/*
 
 # Agent Documentation & Reports
 SKILL.md
@@ -70,3 +70,5 @@ assets/*.excalidraw
 state do видаленя calb.json
 get_real_ids.py
 diag_capacity.py
+manage_issue.py
+.agent/workflows/

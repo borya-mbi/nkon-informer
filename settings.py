@@ -18,6 +18,7 @@ PRICE_ALERT_THRESHOLD = int(os.getenv('PRICE_ALERT_THRESHOLD', 5))
 FETCH_DELIVERY_DATES = os.getenv('FETCH_DELIVERY_DATES', 'true').lower() == 'true'
 FETCH_REAL_STOCK = os.getenv('FETCH_REAL_STOCK', 'true').lower() == 'true'
 RESTOCK_THRESHOLD = int(os.getenv('RESTOCK_THRESHOLD', 100))
+SMALL_RESTOCK_THRESHOLD = int(os.getenv('SMALL_RESTOCK_THRESHOLD', 16))
 DETAIL_FETCH_DELAY = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
 
 # --- Quiet Mode (Global Defaults) ---

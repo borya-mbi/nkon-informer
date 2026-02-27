@@ -109,6 +109,7 @@ min_cap=$(ask_variable "MIN_CAPACITY_AH" "Enter Global MIN_CAPACITY_AH" "false" 
 threshold=$(ask_variable "PRICE_ALERT_THRESHOLD" "Enter PRICE_ALERT_THRESHOLD" "false" "5")
 fetch_dates=$(ask_variable "FETCH_DELIVERY_DATES" "Fetch Delivery Dates for Pre-orders? (true/false)" "false" "true")
 fetch_stock=$(ask_variable "FETCH_REAL_STOCK" "Probe Real Stock Quantity? (true/false)" "false" "true")
+small_threshold=$(ask_variable "SMALL_RESTOCK_THRESHOLD" "Enter SMALL_RESTOCK_THRESHOLD (ignore notifications if <= X pcs)" "false" "16")
 fetch_delay=$(ask_variable "DETAIL_FETCH_DELAY" "Delay between detail requests (seconds)" "false" "2")
 quiet_start=$(ask_variable "QUIET_HOURS_START" "Quiet hours START (hour 0-23)" "false" "21")
 quiet_end=$(ask_variable "QUIET_HOURS_END" "Quiet hours END (hour 0-23)" "false" "8")
@@ -191,7 +192,7 @@ n = os.environ.get('R_NAME', '')
 if n:
     new_rec['name'] = n
 data.append(new_rec)
-print(json.dumps(data, separators=(',', ':')))
+print(json.dumps(data, indent=2))
 ")
         
         read -p "Add another recipient? (y/n, default: n): " another
@@ -207,6 +208,7 @@ TELEGRAM_CONFIG_JSON='$recipients_json'
 # Scraper Thresholds
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
+SMALL_RESTOCK_THRESHOLD=$small_threshold
 
 # Quiet Mode
 QUIET_HOURS_START=$quiet_start

@@ -7,9 +7,21 @@ Write-Host "--- NKON Monitor Setup ---" -ForegroundColor Cyan
 function Get-CurrentFromEnv {
     param ([string]$Key)
     if (Test-Path ".env") {
+        # Read entire file to handle multi-line quoted values
+        $content = Get-Content ".env" -Raw
+        # Match Key='value' where value can span multiple lines (non-greedy match)
+        if ($content -match "(?m)^$Key='(?<value>[\s\S]*?)'(?:\r?\n|$)") {
+            return $Matches['value']
+        }
+        
+        # Fallback to simple line-based parsing for unquoted or simple values
         $line = Get-Content ".env" | Where-Object { $_ -match "^$Key=" }
         if ($line) {
-            return $line.Split('=', 2)[1].Trim()
+            $val = $line.Split('=', 2)[1].Trim()
+            if ($val.StartsWith('"') -and $val.EndsWith('"')) {
+                $val = $val.Substring(1, $val.Length - 2)
+            }
+            return $val
         }
     }
     return ""
@@ -78,6 +90,7 @@ $min_cap = Read-UserVariable -Name "MIN_CAPACITY_AH" -PromptText "Enter Global M
 $threshold = Read-UserVariable -Name "PRICE_ALERT_THRESHOLD" -PromptText "Enter PRICE_ALERT_THRESHOLD" -DefaultValue "5"
 $fetch_dates = Read-UserVariable -Name "FETCH_DELIVERY_DATES" -PromptText "Fetch Delivery Dates for Pre-orders? (true/false)" -DefaultValue "true"
 $fetch_stock = Read-UserVariable -Name "FETCH_REAL_STOCK" -PromptText "Probe Real Stock Quantity? (true/false)" -DefaultValue "true"
+$small_threshold = Read-UserVariable -Name "SMALL_RESTOCK_THRESHOLD" -PromptText "Enter SMALL_RESTOCK_THRESHOLD (ignore notifications if <= X pcs)" -DefaultValue "16"
 $fetch_delay = Read-UserVariable -Name "DETAIL_FETCH_DELAY" -PromptText "Delay between detail requests (seconds)" -DefaultValue "2"
 $quiet_start = Read-UserVariable -Name "QUIET_HOURS_START" -PromptText "Quiet hours START (hour 0-23)" -DefaultValue "21"
 $quiet_end = Read-UserVariable -Name "QUIET_HOURS_END" -PromptText "Quiet hours END (hour 0-23)" -DefaultValue "8"
@@ -155,7 +168,7 @@ if ($manageRecipients -eq "y") {
     }
 }
 
-$final_json = ConvertTo-Json -InputObject @($recipients) -Compress -Depth 10
+$final_json = ConvertTo-Json -InputObject @($recipients) -Depth 10
 
 if ($storageChoice -eq "1") {
     # --- Option 1: Registry ---
@@ -165,6 +178,7 @@ if ($storageChoice -eq "1") {
     [System.Environment]::SetEnvironmentVariable('PRICE_ALERT_THRESHOLD', $threshold, 'User')
     [System.Environment]::SetEnvironmentVariable('FETCH_DELIVERY_DATES', $fetch_dates, 'User')
     [System.Environment]::SetEnvironmentVariable('FETCH_REAL_STOCK', $fetch_stock, 'User')
+    [System.Environment]::SetEnvironmentVariable('SMALL_RESTOCK_THRESHOLD', $small_threshold, 'User')
     [System.Environment]::SetEnvironmentVariable('DETAIL_FETCH_DELAY', $fetch_delay, 'User')
     [System.Environment]::SetEnvironmentVariable('QUIET_HOURS_START', $quiet_start, 'User')
     [System.Environment]::SetEnvironmentVariable('QUIET_HOURS_END', $quiet_end, 'User')
@@ -182,6 +196,7 @@ TELEGRAM_CONFIG_JSON='$final_json'
 # Scraper Thresholds
 MIN_CAPACITY_AH=$min_cap
 PRICE_ALERT_THRESHOLD=$threshold
+SMALL_RESTOCK_THRESHOLD=$small_threshold
 
 # Quiet Mode
 QUIET_HOURS_START=$quiet_start
@@ -206,6 +221,7 @@ $env:MIN_CAPACITY_AH = $min_cap
 $env:PRICE_ALERT_THRESHOLD = $threshold
 $env:FETCH_DELIVERY_DATES = $fetch_dates
 $env:FETCH_REAL_STOCK = $fetch_stock
+$env:SMALL_RESTOCK_THRESHOLD = $small_threshold
 $env:DETAIL_FETCH_DELAY = $fetch_delay
 $env:QUIET_HOURS_START = $quiet_start
 $env:QUIET_HOURS_END = $quiet_end

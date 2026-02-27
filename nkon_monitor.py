@@ -74,6 +74,7 @@ class NkonMonitor:
         
         self.state_file = 'state.json'
         self.previous_state = {}
+        self.quietly_removed = {} # Додаємо сховище для тихо видалених
         self.last_messages = {}
         self.stock_cumulative_diffs = {}
         self.last_notification_time = datetime.min
@@ -84,6 +85,7 @@ class NkonMonitor:
         # Обробка версій State
         if (loaded_state.get('version') or 0) >= 2:
             self.previous_state = loaded_state.get('products', {})
+            self.quietly_removed = loaded_state.get('quietly_removed', {})
             self.last_messages = loaded_state.get('last_messages', {})
             self.stock_cumulative_diffs = loaded_state.get('stock_cumulative_diffs', {})
             nt_str = loaded_state.get('last_notification_time')
@@ -91,6 +93,7 @@ class NkonMonitor:
         else:
             # Legacy state
             self.previous_state = loaded_state
+            self.quietly_removed = {}
             
         self.session = requests.Session()
 
@@ -726,15 +729,46 @@ class NkonMonitor:
         price_changes = []
         status_changes = []
         
-        # Пошук нових товарів та змін
-        is_first_run = not bool(self.previous_state)
+        # Ініціалізуємо список тихо видалених з поточного стану класу
+        quietly_removed = self.quietly_removed.copy()
         
         for link, product in current_state.items():
-            if link not in self.previous_state:
+            # Перевірка наявності в попередньому стані
+            prev_products = self.previous_state
+            if link not in prev_products:
+                # is_first_run is not defined here, assuming it's meant to be `True` if previous_state is empty
+                is_first_run = not bool(prev_products)
                 if not is_first_run:
-                    new_items.append(product)
+                    real_stock = product.get('real_stock')
+                    # Перевіряємо, чи був він раніше тихо видалений
+                    was_quietly_removed = link in quietly_removed
+                    
+                    if real_stock is not None and real_stock <= settings.SMALL_RESTOCK_THRESHOLD:
+                        product['small_stock_notified'] = True
+                        if was_quietly_removed:
+                            logger.info(f"🔕 Ігноруємо ПОВТОРНУ появу товару після зникнення (залишок {real_stock} <= {settings.SMALL_RESTOCK_THRESHOLD} шт): {product['name']}")
+                        else:
+                            logger.info(f"🔔 Новий товар з малим залишком ({real_stock} <= {settings.SMALL_RESTOCK_THRESHOLD} шт): {product['name']}")
+                            new_items.append(product)
+                    else:
+                        new_items.append(product)
+                        # Якщо товару багато, він виходить з тихого режиму
+                        if was_quietly_removed:
+                            logger.info(f"📈 Товар {product['name']} повернувся з ВЕЛИКИМ залишком ({real_stock}), скидаємо тихий режим.")
+                            quietly_removed.pop(link, None)
             else:
-                old_product = self.previous_state[link]
+                old_product = prev_products[link]
+                
+                # Перенесення прапорця
+                if 'small_stock_notified' in old_product:
+                    product['small_stock_notified'] = old_product['small_stock_notified']
+                
+                # Скидання прапорця, якщо залишок перевищив поріг
+                real_stock = product.get('real_stock')
+                if real_stock is not None and real_stock > settings.SMALL_RESTOCK_THRESHOLD:
+                    product.pop('small_stock_notified', None)
+                    # Також про всяк випадок прибираємо з тихого списку
+                    quietly_removed.pop(link, None)
                 
                 # Зміни цін
                 old_price_val = old_product.get('price_value')
@@ -764,28 +798,51 @@ class NkonMonitor:
                 date_changed = product.get('delivery_date') != old_product.get('delivery_date')
                 
                 if status_changed or date_changed:
-                    status_changes.append({
-                        'name': product['name'],
-                        'capacity': product['capacity'],
-                        'link': product['link'],
-                        'price': product['price'],
-                        'old_status': old_product['stock_status'],
-                        'new_status': product['stock_status'],
-                        'old_date': old_product.get('delivery_date'),
-                        'new_date': product.get('delivery_date')
-                    })
+                    real_stock = product.get('real_stock')
+                    # Якщо статус змінився на in_stock або preorder і кількість <= порогу, ігноруємо цю подію
+                    is_restock = status_changed and product['stock_status'] in ['in_stock', 'preorder']
+                    
+                    should_notify = True
+                    if is_restock and real_stock is not None and real_stock <= settings.SMALL_RESTOCK_THRESHOLD:
+                        if product.get('small_stock_notified'):
+                            should_notify = False
+                            logger.info(f"🔕 Ігноруємо ПОВТОРНУ появу товару ({product['stock_status']}, залишок {real_stock} <= {settings.SMALL_RESTOCK_THRESHOLD} шт): {product['name']}")
+                        else:
+                            product['small_stock_notified'] = True
+                            logger.info(f"🔔 ПЕРША поява товару з малим залишком ({product['stock_status']}, залишок {real_stock} <= {settings.SMALL_RESTOCK_THRESHOLD} шт): {product['name']}")
+                            
+                    if should_notify:
+                        status_changes.append({
+                            'name': product['name'],
+                            'capacity': product['capacity'],
+                            'link': product['link'],
+                            'price': product['price'],
+                            'old_status': old_product['stock_status'],
+                            'new_status': product['stock_status'],
+                            'old_date': old_product.get('delivery_date'),
+                            'new_date': product.get('delivery_date')
+                        })
         
         # Пошук видалених товарів
-        for link, product in self.previous_state.items():
+        prev_products = self.previous_state
+        for link, product in prev_products.items():
             if link not in current_state:
-                removed_items.append(product)
-                
+                # Якщо товар мав ознаку малого залишку, відмічаємо його як тихо видалений
+                if product.get('small_stock_notified'):
+                    logger.info(f"🔕 Тихо видаляємо товар, що мав малим залишок: {product['name']}")
+                    quietly_removed[link] = True
+                else:
+                    removed_items.append(product)
+                    # Якщо зникла велика партія - забуваємо про тихий режим для цього посилання
+                    quietly_removed.pop(link, None)
+                    
         return {
             'new': new_items,
             'removed': removed_items,
             'price_changes': price_changes,
             'status_changes': status_changes,
-            'current': current_products  # Додаємо поточні товари для відображення "без змін"
+            'current': current_products,
+            'quietly_removed': quietly_removed
         }
     
     def _extract_grade(self, text: str) -> str:
@@ -1470,12 +1527,17 @@ class NkonMonitor:
             
             new_last_messages['_no_changes'] = active_no_changes
             
+            # Оновлюємо глобальний стан тихо видалених з результатів останньої перевірки
+            if 'rec_changes' in locals() and 'quietly_removed' in rec_changes:
+                self.quietly_removed = rec_changes['quietly_removed']
+
             # State V2
             state_to_save = {
                 'products': current_state,
                 'last_messages': new_last_messages,
                 'stock_cumulative_diffs': self.stock_cumulative_diffs,
                 'last_notification_time': self.last_notification_time.isoformat(),
+                'quietly_removed': self.quietly_removed,
                 'version': 2
             }
             
