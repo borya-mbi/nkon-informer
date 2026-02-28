@@ -25,6 +25,13 @@ DETAIL_FETCH_DELAY = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
 QUIET_HOURS_START = int(os.getenv('QUIET_HOURS_START', 21))
 QUIET_HOURS_END = int(os.getenv('QUIET_HOURS_END', 8))
 
+# --- Visualization ---
+FTP_HOST = os.getenv('FTP_HOST', '')
+FTP_USER = os.getenv('FTP_USER', '')
+FTP_PASS = os.getenv('FTP_PASS', '')
+FTP_DIR = os.getenv('FTP_DIR', '/')
+VISUALIZATION_BASE_URL = os.getenv('VISUALIZATION_BASE_URL', '')
+
 # --- Recipients Configuration ---
 raw_config = os.getenv('TELEGRAM_CONFIG_JSON', '[]')
 RECIPIENTS: List[Dict[str, Any]] = []

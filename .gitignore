@@ -72,3 +72,5 @@ get_real_ids.py
 diag_capacity.py
 manage_issue.py
 .agent/workflows/
+nkon_history.db
+html_output/

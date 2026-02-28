@@ -12,16 +12,23 @@ import re
 import sys
 import time
 import random
+import requests
 import argparse
 import shutil
+import copy
 from logging.handlers import RotatingFileHandler
 from typing import List, Dict, Optional, Set
 from datetime import datetime
+from bs4 import BeautifulSoup
 
 import settings
-
-import requests
-from bs4 import BeautifulSoup
+from db_manager import HistoryDB
+from utils import clean_price, extract_capacity, shorten_name, mask_sensitive, extract_grade
+from telegram_notifier import TelegramNotifier
+try:
+    from visualize_history import HistoryVisualizer
+except ImportError:
+    HistoryVisualizer = None
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -51,9 +58,6 @@ logger = logging.getLogger(__name__)
 
 class NkonMonitor:
     """Клас для моніторингу батарей LiFePO4 на сайті NKON"""
-    
-    # Константи для оформлення Telegram повідомлень
-    LINE_PREFIX = "└──▷"  # Префікс для вкладених ліній. Варіанти: "└─►", "╰─►", "└─▷", "╰─▷", "└──▷", "╰──▷"
     
     def __init__(self):
         """Ініціалізація монітора"""
@@ -96,8 +100,24 @@ class NkonMonitor:
             self.quietly_removed = {}
             
         self.session = requests.Session()
+        self.telegram = TelegramNotifier(self.config, self.session)
+        
 
             
+    def _save_history_to_db(self, products: List[Dict]):
+        """Збереження інформації в історичну базу даних"""
+        try:
+            logger.info("Запис інформації до бази даних історії...")
+            db = HistoryDB()
+            try:
+                db.sync_products(products)
+                db.record_changes_bulk(products)
+                logger.info("✅ Історія успішно збережена в БД.")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"❌ Помилка при збереженні історії в БД: {e}", exc_info=True)
+
     def _load_state(self) -> Dict:
         """Завантаження попереднього стану (для відстеження змін)"""
         if os.path.exists(self.state_file):
@@ -161,7 +181,7 @@ class NkonMonitor:
             delta = current_stock - prev_stock
             diffs = rec_all_diffs.get(key, {"decrease": 0, "increase": 0})
             
-            short = self._shorten_name(item.get('name', key))
+            short = shorten_name(item.get('name', key))
             if delta < 0:
                 diffs["decrease"] += delta
                 if should_log: logger.info(f"📉 {short}: {delta} (продаж)")
@@ -533,59 +553,6 @@ class NkonMonitor:
             return None
     
 
-    def clean_price(self, price_text: str) -> Optional[float]:
-        """
-        Очищення та конвертація ціни в float
-        
-        Args:
-            price_text: Текст ціни (наприклад, "€ 89.95" або "€89.95")
-        
-        Returns:
-            Ціна як float або None
-        """
-        try:
-            # Якщо є і кома, і крапка (наприклад, 1,234.50)
-            if ',' in price_text and '.' in price_text:
-                # Визначаємо, що є роздільником тисяч (той, що йде першим)
-                if price_text.find(',') < price_text.find('.'):
-                    price_text = price_text.replace(',', '') # Видаляємо кому
-                else:
-                    price_text = price_text.replace('.', '').replace(',', '.') # Видаляємо крапку, кому в крапку
-            
-            # Видаляємо всі символи крім цифр, крапки та коми
-            cleaned = re.sub(r'[^\d.,]', '', price_text)
-            # Замінюємо кому на крапку (якщо вона залишилась як єдиний роздільник)
-            cleaned = cleaned.replace(',', '.')
-            
-            # Якщо після заміни залишилось більше однієї крапки (наприклад, 1.234.50)
-            if cleaned.count('.') > 1:
-                parts = cleaned.split('.')
-                cleaned = "".join(parts[:-1]) + "." + parts[-1]
-                
-            return float(cleaned)
-        except (ValueError, AttributeError):
-            return None
-
-    def extract_capacity(self, text: str) -> Optional[int]:
-        """
-        Витягування ємності батареї з тексту
-        
-        Args:
-            text: Текст для пошуку
-            
-        Returns:
-            Ємність в Ah або None
-        """
-        # Гнучкий regex для різних форматів: 280Ah, 280 Ah, 280  Ah, 280ah, 280AH
-        # \d{3,} - мінімум 3 цифри (автоматично фільтрує <100Ah)
-        # \s* - будь-яка кількість пробілів
-        # (?:...) - non-capturing group для всіх варіантів написання
-        # Додаємо підтримку кириличного "Аг" та ігнорування регістру
-        pattern = r'(\d{3,})\s*(?:Ah|ah|AH|aH|Аг|аг|АГ|аГ)'
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-        return None
     
     def _get_next_page_url(self, html: str) -> Optional[str]:
         """
@@ -639,7 +606,7 @@ class NkonMonitor:
         name = name_elem.get_text(strip=True)
         
         # Витягування ємності
-        capacity = self.extract_capacity(name)
+        capacity = extract_capacity(name)
         
         # Фільтрація: тільки >= min_capacity_ah
         min_capacity = self.config.get('min_capacity_ah', 200)
@@ -663,7 +630,7 @@ class NkonMonitor:
         else:
             logger.warning(f"Ціну не знайдено для {name}")
             
-        price_float = self.clean_price(price_raw)
+        price_float = clean_price(price_raw)
         
         # Нормалізація відображення ціни (завжди €52.95 замість 52,95 EUR)
         if price_float is not None:
@@ -845,467 +812,21 @@ class NkonMonitor:
             'quietly_removed': quietly_removed
         }
     
-    def _extract_grade(self, text: str) -> str:
-        """
-        Витягування грейду (Grade A/B) з назви
-        Підтримує англійську (Grade) та українську (Клас) версії
-        """
-        # Grade A, Grade A-, Клас A, Група A, B-Grade тощо
-        match = re.search(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-BА-Б][-+]?|[A-BА-Б]-Grade)', text)
-        if match:
-            grade = match.group(0)
-            # Нормалізація: B-Grade -> Grade B
-            if len(grade) > 1 and grade[1] == '-': 
-                return f"Grade {grade[0]}"
-            # Клас A -> Grade A, Група A -> Grade A
-            grade = re.sub(r'(?i)(Клас|Група)', 'Grade', grade)
-            # Нормалізація літер (Кирилиця А/Б -> Латиниця A/B)
-            grade = grade.replace('А', 'A').replace('Б', 'B')
-            grade = grade.title()  # grade a -> Grade A
-            return grade
-        return "?"
 
-    def _shorten_name(self, text: str) -> str:
-        """
-        Скорочення назви товару для компактності
-        Підтримує англійську та українську версії
-        """
-        # 1. Видаляємо грейд (бо ми його показуємо окремо)
-        # Підтримка Grade/Клас/Група
-        text = re.sub(r'(?i)(?:(?:Grade|Клас|Група)\s*[A-BА-Б][-+]?|[A-BА-Б]-Grade)', '', text)
-        
-        # 2. Видаляємо технічні характеристики (бо вони зрозумілі з контексту)
-        remove_words = [
-            r'LiFePO4', r'3\.2V', r'Prismatic', r'Rechargeable', 
-            r'Battery', r'Cell', r'\d+\s*Ah',  # Ємність вже є на початку
-            r'Призматичний'  # Українська "Prismatic"
-        ]
-        
-        for word in remove_words:
-            text = re.sub(f'(?i){word}', '', text)
-            
-        # 3. Видаляємо зайві символи та пробіли
-        text = text.replace(' - ', ' ').replace(' , ', ' ')
-        
-        # Видаляємо дублікати пробілів
-        text = ' '.join(text.split())
-        
-        # Видаляємо зайві символи в кінці та на початку (тире, коми, крапки)
-        text = text.strip(" -.,|")
-        
-        # Максимальна довжина (обрізаємо якщо задовга)
-        if len(text) > 30:
-            text = text[:28] + ".."
-            
-        return text.strip()
-
-    def _mask_sensitive(self, text: str) -> str:
-        """Маскування чутливих даних в логах"""
-        if not text: return ""
-        text_str = str(text)
-        if len(text_str) <= 12:
-            return "***"
-        return f"{text_str[:4]}***{text_str[-4:]}"
-
-    def _format_stock_display(self, item, show_diffs: bool = True, msg_key: str = None) -> str:
-        """Формує рядок залишку. Чисте читання - можна викликати багато разів."""
-        if item.get('real_stock') is None:
-            # Якщо ми знаємо, що товар в наявності, але не знаємо скільки - показуємо статус
-            if item.get('stock_status') == 'in_stock':
-                return " `[В\u00a0наявності]`"
-            return ""
-            
-        current = item['real_stock']
-        
-        if not show_diffs or not msg_key:
-            return f" `[{current} шт]`"
-        
-        key = f"{item['link']}_{item.get('capacity', '0')}"
-        
-        # Отримуємо дельти для конкретного отримувача (msg_key)
-        rec_diffs = self.stock_cumulative_diffs.get(msg_key, {})
-        diffs = rec_diffs.get(key, {"decrease": 0, "increase": 0})
-        
-        dec = diffs["decrease"]  # завжди <= 0
-        inc = diffs["increase"]  # завжди >= 0
-        
-        if dec != 0 or inc != 0:
-            diff_str = ""
-            if dec != 0: diff_str += str(dec)       # "-128"
-            if inc != 0: diff_str += f"+{inc}"      # "+2000"
-            return f" `[{current}({diff_str}) шт]`"
-            
-        return f" `[{current} шт]`"
-
-    def format_telegram_message(self, changes: Dict, include_unchanged: bool = True, is_update: bool = False, show_stock_diffs: bool = False, unchanged_header: str = "Без змін", msg_key: str = None, header_link: str = None, footer_links: list = None) -> Optional[str]:
-        """
-        Форматування повідомлення для Telegram
-        """
-        if header_link:
-            msg = f"[🔋 NKON LiFePO4 Monitor]({header_link})\n\n"
-        else:
-            msg = f"🔋 *NKON LiFePO4 Monitor*\n\n"
-        
-        has_changes = False
-        threshold = self.config.get('price_alert_threshold', 5)
-        
-        def get_grade_display(grade_str: str) -> str:
-            """Формує рядок грейду з відповідним емодзі та іконкою мінуса"""
-            if grade_str == "?":
-                return ""
-            
-            # Вибір основної іконки
-            emoji = "🅰️" if "Grade A" in grade_str else "🅱️" if "Grade B" in grade_str else "❓"
-            
-            # Додаємо іконку мінуса, якщо він є в грейді
-            if "-" in grade_str:
-                emoji += "➖"
-                
-            return f"{emoji} {grade_str} | "
-
-        def format_line(item, prefix_emoji="", show_status=False):
-            """Helper для форматування одного рядка товару"""
-            grade = self._extract_grade(item['name'])
-            short_name = self._shorten_name(item['name'])
-            price = item.get('price', 'N/A')
-            grade_msg = get_grade_display(grade)
-            
-            # 1. Підготовка повідомлення про залишок
-            stock_msg = self._format_stock_display(item, show_diffs=show_stock_diffs, msg_key=msg_key)
-            
-            # 2. Статус (Pre-order/In Stock) + Дата доставки
-            status_ico = ""
-            delivery_msg = ""
-            
-            if item.get('stock_status') == 'preorder':
-                status_ico = f" [📦Pre]({item['link']})"
-                if item.get('delivery_date'):
-                    # Для Pre-order залишок йде після дати (зовні лінка, щоб не зламати Markdown)
-                    delivery_msg = f"\n  [{self.LINE_PREFIX} {item['delivery_date']}]({item['link']}){stock_msg}"
-                else:
-                    # Якщо раптом дати немає, але є залишок
-                    status_ico += stock_msg
-            elif item.get('stock_status') == 'in_stock':
-                status_ico = f" [✅In]({item['link']})"
-                if stock_msg:
-                    # Додаємо кількість для In Stock
-                    delivery_msg = f"\n  [{self.LINE_PREFIX} В\u00a0наявності]({item['link']}){stock_msg}"
-                else:
-                    status_ico += stock_msg
-            elif item.get('stock_status') == 'out_of_stock':
-                status_ico = f" ❌Out{stock_msg}"
-                
-            link_text = f"[{item['capacity']}Ah]({item['link']})"
-            
-            return f"{prefix_emoji} {link_text} {grade_msg}{short_name} | {price}{status_ico}{delivery_msg}"
-
-        # Нові товари
-        if changes.get('new'):
-            has_changes = True
-            msg += f"✨ *Нові товари ({len(changes['new'])}):*\n"
-            for item in changes['new']:
-                msg += format_line(item, "•") + "\n"
-            msg += "\n"
-        
-        # Зміни цін
-        if changes.get('price_changes'):
-            has_changes = True
-            msg += f"💰 *Зміни цін ({len(changes['price_changes'])}):*\n"
-            for item in changes['price_changes']:
-                old_price = item.get('old_price', 'N/A')
-                new_price = item.get('new_price', 'N/A')
-                change_str = f"{old_price} → {new_price}"
-                
-                # Розрахунок відсотку
-                old_val = item.get('old_price_value')
-                new_val = item.get('new_price_value')
-                
-                if old_val and new_val:
-                    try:
-                        change_percent = ((new_val - old_val) / old_val) * 100
-                        # Показуємо відсоток тільки якщо зміни значні
-                        if abs(change_percent) >= threshold:
-                            emoji = "🔴" if change_percent > 0 else "🟢"
-                            sign = "+" if change_percent > 0 else ""
-                            change_str += f" ({emoji}{sign}{change_percent:.1f}%)"
-                    except ZeroDivisionError:
-                        pass
-                
-                grade = self._extract_grade(item['name'])
-                grade_msg = get_grade_display(grade)
-                short_name = self._shorten_name(item['name'])
-                
-                msg += f"• [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name} | {change_str}\n"
-            msg += "\n"
-        
-        # Зміни статусу або дати
-        if changes.get('status_changes'):
-            has_changes = True
-            msg += f"📦 *Зміни статусу({len(changes['status_changes'])}):*\n"
-            for item in changes['status_changes']:
-                new_status = item.get('new_status')
-                old_status = item.get('old_status')
-                price = item.get('price', 'N/A')
-                
-                status_map = {'preorder': 'Pre', 'in_stock': 'In', 'out_of_stock': 'Out'}
-                status_emoji = "✅" if new_status == 'in_stock' else "📦"
-                old_str = status_map.get(old_status, 'Out')
-                new_str = status_map.get(new_status, 'Out')
-                
-                if old_status != new_status:
-                    status_info = f" | {old_str} → {new_str}"
-                else:
-                    status_info = "" # Статус не змінився, значить змінилася тільки дата
-                
-                # Показ дати
-                date_msg = ""
-                old_date = item.get('old_date')
-                new_date = item.get('new_date')
-                if new_date:
-                    if old_date and old_date != new_date:
-                        date_msg = f"\n  {self.LINE_PREFIX} {old_date} → {new_date}"
-                    else:
-                        date_msg = f"\n  {self.LINE_PREFIX} {new_date}"
-                
-                grade_raw = self._extract_grade(item['name'])
-                grade_msg = get_grade_display(grade_raw)
-                short_name = self._shorten_name(item['name'])
-                
-                msg += f"• {status_emoji} [{item['capacity']}Ah]({item['link']}) {grade_msg}{short_name}{status_info}{date_msg} | {price}\n"
-            msg += "\n"
-        
-        # Видалені товари
-        if changes.get('removed'):
-            has_changes = True
-            msg += f"❌ *Видалені ({len(changes['removed'])}):*\n"
-            for item in changes['removed']:
-                link_text = f"[{item['capacity']}Ah]({item['link']})"
-                msg += f"• {link_text} {self._shorten_name(item['name'])}\n"
-            msg += "\n"
-            
-        # Якщо змін немає, чи показувати повний список?
-        if not has_changes and not include_unchanged:
-            return None
-        
-        # Збираємо лінки товарів, що змінилися
-        changed_links = set()
-        for item in changes.get('new', []): changed_links.add(item['link'])
-        for item in changes.get('price_changes', []): changed_links.add(item['link'])
-        for item in changes.get('status_changes', []): changed_links.add(item['link'])
-        
-        # Включаємо блок "Без змін" тільки якщо просили
-        if include_unchanged:
-            current = changes.get('current', [])
-            unchanged = [p for p in current if p['link'] not in changed_links]
-            
-            if unchanged:
-                msg += f"📋 *{unchanged_header} ({len(unchanged)}):*\n"
-                for item in unchanged:
-                    msg += format_line(item, "•") + "\n"
-        
-        # Видаляємо всі зайві пробіли/переноси в кінці та додаємо час одним пустим рядком
-        msg = msg.strip()
-        status_emoji = "🆕" if not is_update else "🔄"
-        msg += f"\n\n{status_emoji} {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
-        # Формування футера з декількох посилань у форматі "💬 Обговорення: Канал | Борис"
-        if footer_links:
-            links_list = [
-                f"[{link.get('name', 'Чат')}]({link['url']})"
-                for link in footer_links if link.get('url')
-            ]
-            if links_list:
-                msg += f"\n\n💬 Обговорення: " + " | ".join(links_list)
-        return msg
-
-    
-    def edit_telegram_message(self, chat_id: str, message_id: int, text: str) -> bool:
-        """
-        Редагування існуючого повідомлення
-        """
-        bot_token = self.config.get('telegram_bot_token')
-        if not bot_token: return False
-        
-        # Перетворюємо в int якщо це числовий ID (для стабільності API)
-        target_chat = chat_id
-        if isinstance(chat_id, str):
-            if (chat_id.startswith('-') and chat_id[1:].isdigit()) or chat_id.isdigit():
-                target_chat = int(chat_id)
-        
-        url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
-        payload = {
-            'chat_id': target_chat,
-            'message_id': message_id,
-            'text': text,
-            'parse_mode': 'Markdown',
-            'disable_web_page_preview': True
-        }
-        
-        masked_chat = self._mask_sensitive(chat_id)
-        
-        try:
-            response = self.session.post(url, json=payload, timeout=10)
-            if not response.ok:
-                logger.warning(f"Не вдалося відредагувати повідомлення {masked_chat}/{message_id}: {response.text}")
-                return False
-            logger.info(f"✏️ Повідомлення {message_id} у чаті {masked_chat} оновлено")
-            return True
-        except Exception as e:
-            logger.warning(f"Помилка редагування в {masked_chat}: {e}")
-            return False
-
-    def send_telegram_message(self, message: str, chat_ids: Set[str] = None, thread_id: Optional[int] = None, dry_run: bool = False, disable_notification: bool = False) -> Dict[str, int]:
-        """
-        Відправка повідомлення в Telegram
-        Returns: Dict {chat_id: message_id}
-        """
-        sent_messages = {}
-        if not chat_ids:
-            return sent_messages
-
-        # --- Quiet Mode Logic ---
-        now_hour = datetime.now().hour
-        q_start = self.config.get('quiet_hours_start', 21)
-        q_end = self.config.get('quiet_hours_end', 8)
-        
-        is_quiet = False
-        if q_start > q_end:  # e.g. 21:00 to 08:00
-            if now_hour >= q_start or now_hour < q_end:
-                is_quiet = True
-        else:  # e.g. 00:00 to 08:00
-            if q_start <= now_hour < q_end:
-                is_quiet = True
-        
-        if is_quiet and not disable_notification:
-            logger.info(f"🌙 Quiet Mode ({q_start}-{q_end}): вимикаємо звук для повідомлення")
-            disable_notification = True
-
-        if dry_run:
-            logger.info(f"[DRY RUN] Telegram повідомлення для {[self._mask_sensitive(c) for c in chat_ids]}:\n{message}")
-            return sent_messages
-
-        bot_token = self.config.get('telegram_bot_token')
-        if not bot_token:
-            logger.error("Telegram credentials не налаштовані")
-            return sent_messages
-        
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        success_count = 0
-        
-        for chat_id in chat_ids:
-            masked_chat = self._mask_sensitive(chat_id)
-            
-            # Перетворюємо в int якщо це числовий ID
-            target_chat = chat_id
-            if isinstance(chat_id, str):
-                if (chat_id.startswith('-') and chat_id[1:].isdigit()) or chat_id.isdigit():
-                    target_chat = int(chat_id)
-            
-            payload = {
-                'chat_id': target_chat,
-                'text': message,
-                'parse_mode': 'Markdown',
-                'disable_web_page_preview': True,
-                'disable_notification': disable_notification
-            }
-            
-            # Пріоритет: аргумент thread_id > налаштування в config (якщо вони залишились)
-            target_thread = thread_id or self.config.get('telegram_thread_id')
-            if target_thread:
-                payload['message_thread_id'] = target_thread
-            
-            try:
-                response = self.session.post(url, json=payload, timeout=10)
-                if not response.ok:
-                    logger.error(f"❌ Помилка Telegram API для {masked_chat}: {response.status_code} {response.text}")
-                response.raise_for_status()
-                
-                data = response.json()
-                if data.get('ok'):
-                    msg_id = data['result']['message_id']
-                    sent_messages[chat_id] = msg_id
-                
-                success_count += 1
-                logger.info(f"✅ Повідомлення відправлено до чату {masked_chat}")
-            except Exception as e:
-                if not isinstance(e, requests.exceptions.HTTPError):
-                    logger.error(f"❌ Помилка відправки до чату {masked_chat}: {e}")
-        
-        if success_count > 0:
-            logger.info(f"📊 Відправлено {success_count}/{len(chat_ids)} повідомлень")
-            
-        return sent_messages
-    
-    def _should_notify(self, has_changes: bool) -> tuple:
-        """
-        Визначає, чи потрібно надсилати повідомлення зі звуком.
-        
-        Returns: (should_notify: bool, reason: str)
-        """
-        if has_changes:
-            return True, "changes"
-        
-        now = datetime.now()
-        last = self.last_notification_time
-        # Cooldown за замовчуванням 24h (буде автоматично перевизначено при завантаженні конфігу)
-        cooldown_hours = self.config.get('heartbeat_cooldown', 24.0)
-        
-        # 1. Перевірка Cooldown (найвищий пріоритет для тиші)
-        if (now - last).total_seconds() < (cooldown_hours * 3600):
-            logger.info(f"🔕 Heartbeat пропущено: cooldown (остання {last.strftime('%H:%M')})")
-            return False, "cooldown"
-        
-        # 2. Перевірка Heartbeat слотів
-        heartbeat_times = self.config.get('heartbeat_times', [])
-        for hb_time in heartbeat_times:
-            # Чи зараз >= цей слот?
-            if now.time() >= hb_time:
-                # Чи вже була нотифікація ПІСЛЯ цього слоту сьогодні?
-                slot_dt = datetime.combine(now.date(), hb_time)
-                if last < slot_dt:
-                    logger.info(f"🔔 Heartbeat: слот {hb_time.strftime('%H:%M')}")
-                    return True, "heartbeat"
-        
-        return False, "silent"
-
-    def _calculate_auto_cooldown(self, heartbeat_times: list) -> float:
-        """
-        Розраховує автоматичний кулдаун на основі мінімальної відстані між слотами хартбіту.
-        """
-        if not heartbeat_times or len(heartbeat_times) < 1:
-            return 24.0
-        
-        if len(heartbeat_times) == 1:
-            return 24.0
-            
-        # Сортуємо для впевненості
-        sorted_times = sorted(heartbeat_times)
-        intervals = []
-        
-        # Інтервали між сусідніми слотами
-        for i in range(len(sorted_times) - 1):
-            t1 = sorted_times[i]
-            t2 = sorted_times[i+1]
-            diff = (t2.hour + t2.minute/60.0) - (t1.hour + t1.minute/60.0)
-            intervals.append(diff)
-            
-        # Інтервал через північ (останній до першого наступного дня)
-        t_first = sorted_times[0]
-        t_last = sorted_times[-1]
-        diff_midnight = (24.0 - (t_last.hour + t_last.minute/60.0)) + (t_first.hour + t_first.minute/60.0)
-        intervals.append(diff_midnight)
-        
-        return min(intervals)
-
-    def run(self, dry_run: bool = False, force_notify: bool = False):
+    def run(self, dry_run: bool = False, force_notify: bool = False, no_db: bool = False, no_fetch: bool = False):
         """
         Основний цикл моніторингу
         
         Args:
             dry_run: Якщо True, не відправляти Telegram повідомлення
             force_notify: Примусова нотифікація зі звуком
+            no_db: Якщо True, не записувати в БД
+            no_fetch: Якщо True, використовувати останній стан замість парсингу
         """
         logger.info("=" * 60)
-        logger.info(f"Запуск моніторингу NKON (Фаза 4: {len(settings.RECIPIENTS)} отримувачів)")
+        logger.info(f"Запуск моніторингу NKON (Фаза 5: {len(settings.RECIPIENTS)} отримувачів)")
+        if no_fetch:
+            logger.info("🟢 Режим BEЗ ПАРСИНГУ: використання останнього стану зі state.json")
         logger.info("=" * 60)
         
         # --- Aggregation Logic (Розрахунок мінімальних вимог для скрапера) ---
@@ -1321,78 +842,97 @@ class NkonMonitor:
             effective_fetch_stock = any([r.get('fetch_real_stock', settings.FETCH_REAL_STOCK) for r in settings.RECIPIENTS])
 
         driver = None
+        products = []
         try:
-            # Ініціалізація драйвера
-            driver = self._init_driver()
-            
-            # Завантаження сторінок з пагінацією
-            url = settings.NKON_URL
-            
-            products = []
-            current_url = url
-            page_num = 1
-            max_pages = 5
-            
-            while current_url and page_num <= max_pages:
+            if not no_fetch:
+                # Ініціалізація драйвера
+                driver = self._init_driver()
+                
+                # Завантаження сторінок з пагінацією
+                url = settings.NKON_URL
+                
+                current_url = url
+                page_num = 1
+                max_pages = 5
+                
+                while current_url and page_num <= max_pages:
+                    if page_num > 1:
+                        logger.info(f"Перехід до сторінки {page_num}: {current_url}")
+                    
+                    html = self.fetch_page_with_selenium(current_url, driver=driver)
+                    
+                    # Парсинг товарів з поточної сторінки
+                    page_products = self.parse_products(html)
+                    
+                    # Попередня фільтрація за ефективною мінімальною ємністю
+                    page_products = [p for p in page_products if p['capacity'] >= effective_min_ah]
+                    products.extend(page_products)
+                    
+                    # Пошук наступної сторінки
+                    current_url = self._get_next_page_url(html)
+                    if current_url:
+                        page_num += 1
+                    else:
+                        break
+                
                 if page_num > 1:
-                    logger.info(f"Перехід до сторінки {page_num}: {current_url}")
+                    logger.info(f"Загалом знайдено {len(products)} товарів (>={effective_min_ah}Ah) на {page_num} сторінках")
                 
-                html = self.fetch_page_with_selenium(current_url, driver=driver)
-                
-                # Парсинг товарів з поточної сторінки
-                page_products = self.parse_products(html)
-                
-                # Попередня фільтрація за ефективною мінімальною ємністю
-                page_products = [p for p in page_products if p['capacity'] >= effective_min_ah]
-                products.extend(page_products)
-                
-                # Пошук наступної сторінки
-                current_url = self._get_next_page_url(html)
-                if current_url:
-                    page_num += 1
-                else:
-                    break
-            
-            if page_num > 1:
-                logger.info(f"Загалом знайдено {len(products)} товарів (>={effective_min_ah}Ah) на {page_num} сторінках")
-            
-            # Додатково: отримання деталей
-            if effective_fetch_dates or effective_fetch_stock:
-                target_items = [p for p in products if p['stock_status'] in ['in_stock', 'preorder']]
-                
-                if target_items:
-                    logger.info(f"Збір деталей для {len(target_items)} товарів (Dates={effective_fetch_dates}, Stock={effective_fetch_stock})...")
-                    for p in target_items:
-                        # 1. Дата доставки
-                        if effective_fetch_dates:
-                            date = self._fetch_delivery_date_details(p['link'], driver=driver)
-                            if date:
-                                p['delivery_date'] = date
-                                if p['stock_status'] == 'in_stock':
-                                    logger.info(f"  Каталог вказав in_stock, але знайдено дату передзамовлення -> preorder")
-                                    p['stock_status'] = 'preorder'
-                            else:
+                # Додатково: отримання деталей
+                if effective_fetch_dates or effective_fetch_stock:
+                    target_items = [p for p in products if p['stock_status'] in ['in_stock', 'preorder']]
+                    
+                    if target_items:
+                        logger.info(f"Збір деталей для {len(target_items)} товарів (Dates={effective_fetch_dates}, Stock={effective_fetch_stock})...")
+                        for p in target_items:
+                            # 1. Дата доставки
+                            if effective_fetch_dates:
+                                date = self._fetch_delivery_date_details(p['link'], driver=driver)
+                                if date:
+                                    p['delivery_date'] = date
+                                    if p['stock_status'] == 'in_stock':
+                                        logger.info(f"  Каталог вказав in_stock, але знайдено дату передзамовлення -> preorder")
+                                        p['stock_status'] = 'preorder'
+                                else:
+                                    key = f"{p['link']}_{p.get('capacity', '0')}"
+                                    old_p = self.previous_state.get(key)
+                                    if old_p and old_p.get('stock_status') == 'preorder' and old_p.get('delivery_date'):
+                                        p['delivery_date'] = old_p['delivery_date']
+                            
+                            # 2. Реальний залишок — адаптивний пошук для preorder та in_stock товарів.
+                            if effective_fetch_stock and p['stock_status'] in ('preorder', 'in_stock'):
                                 key = f"{p['link']}_{p.get('capacity', '0')}"
                                 old_p = self.previous_state.get(key)
-                                if old_p and old_p.get('stock_status') == 'preorder' and old_p.get('delivery_date'):
-                                    p['delivery_date'] = old_p['delivery_date']
-                        
-                        # 2. Реальний залишок — адаптивний пошук для preorder та in_stock товарів.
-                        if effective_fetch_stock and p['stock_status'] in ('preorder', 'in_stock'):
-                            key = f"{p['link']}_{p.get('capacity', '0')}"
-                            old_p = self.previous_state.get(key)
-                            prev_stock = old_p.get('real_stock') if old_p else None
-                            
-                            stock = self._fetch_real_stock(p['link'], driver=driver, prev_stock=prev_stock)
-                            if stock is not None:
-                                p['real_stock'] = stock
-                                if stock == 0:
-                                    logger.warning(f"  ⚠️ {p.get('capacity')}Ah: 0 шт на складі, статус -> out_of_stock")
-                                    p['stock_status'] = 'out_of_stock'
-                            else:
-                                # Якщо не вдалося отримати новий, зберігаємо старий (якщо був)
-                                if old_p and old_p.get('real_stock') is not None:
-                                    p['real_stock'] = old_p['real_stock']
+                                prev_stock = old_p.get('real_stock') if old_p else None
+                                
+                                stock = self._fetch_real_stock(p['link'], driver=driver, prev_stock=prev_stock)
+                                if stock is not None:
+                                    p['real_stock'] = stock
+                                    if stock == 0:
+                                        logger.warning(f"  ⚠️ {p.get('capacity')}Ah: 0 шт на складі, статус -> out_of_stock")
+                                        p['stock_status'] = 'out_of_stock'
+                                else:
+                                    # Якщо не вдалося отримати новий, зберігаємо старий (якщо був)
+                                    if old_p and old_p.get('real_stock') is not None:
+                                        p['real_stock'] = old_p['real_stock']
+            else:
+                # Режим використання стану без парсингу
+                test_state_file = 'test_new_state.json'
+                if os.path.exists(test_state_file):
+                    try:
+                        with open(test_state_file, 'r', encoding='utf-8') as f:
+                            test_state = json.load(f)
+                            products = copy.deepcopy(list(test_state.get('products', {}).values()))
+                        logger.info(f"🟢 Використовуємо ТЕСТОВИЙ стан з {test_state_file}: завантажено {len(products)} товарів")
+                    except Exception as e:
+                        logger.error(f"❌ Помилка читання {test_state_file}: {e}")
+                        products = []
+                elif self.previous_state:
+                    logger.info(f"📂 test_new_state.json не знайдено. Використовуємо поточний стан (Без змін)")
+                    products = copy.deepcopy(list(self.previous_state.values()))
+                else:
+                    logger.warning("⚠️ Попередній стан порожній, нічого обробляти у режимі --no-fetch")
+                    products = []
             
             # Остаточна фільтрація: видаляємо виявлені out_of_stock
             products = [p for p in products if p['stock_status'] in ['in_stock', 'preorder']]
@@ -1406,7 +946,7 @@ class NkonMonitor:
             active_no_changes = {}
             
             # Спочатку створюємо загальний список товарів для збереження в state
-            current_state = {f"{p['link']}_{p.get('capacity', '0')}": p for p in products}
+            current_state = {HistoryDB.generate_key(p): p for p in products}
 
             # Визначаємо URL головного каналу (з першого реципієнта)
             main_channel_url = settings.RECIPIENTS[0].get('url') if settings.RECIPIENTS else None
@@ -1442,16 +982,16 @@ class NkonMonitor:
                 
                 # 1. Повні звіти
                 if rpt_type == 'full':
-                    msg_full = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
+                    msg_full = self.telegram.format_telegram_message(rec_changes, include_unchanged=True, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
                     if msg_full:
-                        sent = self.send_telegram_message(msg_full, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run)
+                        sent = self.telegram.send_telegram_message(msg_full, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run)
                         if chat_id in sent:
                             new_last_messages[msg_key] = sent[chat_id]
                 
                 # 2. Звіти про зміни
                 elif rpt_type == 'changes':
-                    msg_ch = self.format_telegram_message(rec_changes, include_unchanged=False, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
-                    should_notify, reason = self._should_notify(bool(msg_ch))
+                    msg_ch = self.telegram.format_telegram_message(rec_changes, include_unchanged=False, is_update=False, msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
+                    should_notify, reason = self.telegram._should_notify(recipient, bool(msg_ch), self.last_notification_time)
                     if force_notify:
                         should_notify, reason = True, "force-notify"
                     
@@ -1461,45 +1001,45 @@ class NkonMonitor:
                     if msg_ch:
                         # Зафіксувати дельти у старому повідомленні
                         if last_nc_id and not dry_run:
-                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
-                            self.edit_telegram_message(chat_id, last_nc_id, msg_upd)
+                            msg_upd = self.telegram.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
+                            self.telegram.edit_telegram_message(chat_id, last_nc_id, msg_upd)
                         
                         # Скидаємо лічильники ТІЛЬКИ ПІСЛЯ оновлення старого (як контрольна точка)
                         self.stock_cumulative_diffs[msg_key] = {}
 
                         # Нове повідомлення про зміни
                         logger.info(f"📣 Зміни для {msg_key}: надсилаємо звіт")
-                        self.send_telegram_message(msg_ch, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run)
+                        self.telegram.send_telegram_message(msg_ch, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run)
                         self.last_notification_time = datetime.now()
                         
                         if not dry_run: time.sleep(2)
                         
                         # Новий стан (тихо)
                         no_changes_only = {'new': [], 'removed': [], 'price_changes': [], 'status_changes': [], 'current': rec_changes['current']}
-                        msg_ns = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links)
-                        sent_st = self.send_telegram_message(msg_ns, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=True)
+                        msg_ns = self.telegram.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
+                        sent_st = self.telegram.send_telegram_message(msg_ns, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=True)
                         if chat_id in sent_st:
                             active_no_changes[msg_key] = sent_st[chat_id]
                     
                     elif reason == "heartbeat" or reason == "force-notify":
                         logger.info(f"🔔 Heartbeat/Force для {msg_key}")
                         if last_nc_id and not dry_run:
-                            msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
-                            self.edit_telegram_message(chat_id, last_nc_id, msg_upd)
+                            msg_upd = self.telegram.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
+                            self.telegram.edit_telegram_message(chat_id, last_nc_id, msg_upd)
                         
                         self.stock_cumulative_diffs[msg_key] = {}
                         if not dry_run: time.sleep(2)
                         
                         no_changes_only = {'new': [], 'removed': [], 'price_changes': [], 'status_changes': [], 'current': rec_changes['current']}
-                        msg_hb = self.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links)
-                        sent_hb = self.send_telegram_message(msg_hb, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=False)
+                        msg_hb = self.telegram.format_telegram_message(no_changes_only, include_unchanged=True, is_update=False, show_stock_diffs=False, unchanged_header="Новий стан", msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
+                        sent_hb = self.telegram.send_telegram_message(msg_hb, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=False)
                         self.last_notification_time = datetime.now()
                         if chat_id in sent_hb:
                             active_no_changes[msg_key] = sent_hb[chat_id]
                     
                     else:
                         # Без змін - тихо редагувати
-                        msg_upd = self.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links)
+                        msg_upd = self.telegram.format_telegram_message(rec_changes, include_unchanged=True, is_update=True, show_stock_diffs=True, msg_key=msg_key, header_link=header_link, footer_links=footer_links, stock_cumulative_diffs=self.stock_cumulative_diffs)
                         if not msg_upd:
                             if header_link:
                                 msg_upd = f"[🔋 NKON Monitor]({header_link})\n\n📋 Без змін\n\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
@@ -1516,12 +1056,12 @@ class NkonMonitor:
                         
                         success = False
                         if last_nc_id and not dry_run:
-                            success = self.edit_telegram_message(chat_id, last_nc_id, msg_upd)
+                            success = self.telegram.edit_telegram_message(chat_id, last_nc_id, msg_upd)
                             if success:
                                 active_no_changes[msg_key] = last_nc_id
                         
                         if not success:
-                            sent_nc = self.send_telegram_message(msg_upd, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=True)
+                            sent_nc = self.telegram.send_telegram_message(msg_upd, chat_ids={chat_id}, thread_id=thread_id, dry_run=dry_run, disable_notification=True)
                             if chat_id in sent_nc:
                                 active_no_changes[msg_key] = sent_nc[chat_id]
             
@@ -1546,6 +1086,23 @@ class NkonMonitor:
             else:
                 logger.info("🚫 Dry Run: State НЕ оновлено")
             
+            # Запис в БД після розсилки (Фаза 5+)
+            if not no_db:
+                self._save_history_to_db(products)
+                
+                # Генерація та завантаження графіків історії
+                if HistoryVisualizer and settings.FTP_HOST and settings.VISUALIZATION_BASE_URL:
+                    try:
+                        logger.info("Генерація та вивантаження графіків історії...")
+                        visualizer = HistoryVisualizer()
+                        files = visualizer.generate_htmls()
+                        if files:
+                            visualizer.upload_to_sftp(files)
+                    except Exception as e:
+                        logger.error(f"Помилка при обробці графіків візуалізації: {e}")
+            else:
+                logger.info("🚫 No-DB Run: Запис до БД пропущено")
+            
             logger.info("=" * 60)
             logger.info("Моніторинг завершено успішно")
             logger.info("=" * 60)
@@ -1563,7 +1120,7 @@ class NkonMonitor:
                 try:
                     admin_chats = {str(r['chat_id']) for r in settings.RECIPIENTS if r.get('type') == 'full'}
                     if admin_chats:
-                        self.send_telegram_message(error_msg, chat_ids=admin_chats)
+                        self.telegram.send_telegram_message(error_msg, chat_ids=admin_chats)
                 except Exception as send_err:
                     logger.error(f"Не вдалося відправити помилку в Telegram: {send_err}")
             
@@ -1581,11 +1138,15 @@ def main():
                         help='Запуск без відправки Telegram повідомлень (для тестування)')
     parser.add_argument('--force-notify', action='store_true',
                         help='Примусова нотифікація зі звуком (для тестування)')
+    parser.add_argument('--no-db', action='store_true',
+                        help='Не записувати дані в базу даних історії (nkon_history.db)')
+    parser.add_argument('--no-fetch', action='store_true',
+                        help='Запуск без фактичного парсингу веб-сторінки (використовується останній стан зі state.json)')
     
     args = parser.parse_args()
     
     monitor = NkonMonitor()
-    monitor.run(dry_run=args.dry_run, force_notify=args.force_notify)
+    monitor.run(dry_run=args.dry_run, force_notify=args.force_notify, no_db=args.no_db, no_fetch=args.no_fetch)
 
 
 if __name__ == '__main__':
