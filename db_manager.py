@@ -70,19 +70,28 @@ class HistoryDB:
         cursor = self.conn.cursor()
         for product in current_products:
             product_key = self.generate_key(product)
-            cursor.execute('''
-                INSERT INTO products (product_key, url, name, capacity_ah)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(product_key) DO UPDATE SET
-                    url = excluded.url,
-                    name = excluded.name,
-                    capacity_ah = excluded.capacity_ah
-            ''', (
-                product_key,
-                product['link'],
-                product['name'],
-                product.get('capacity', 0)
-            ))
+            url = product['link']
+            name = product['name']
+            capacity_ah = product.get('capacity', 0)
+            
+            # Перевіряємо, чи існує вже такий продукт
+            cursor.execute('SELECT id, url, name, capacity_ah FROM products WHERE product_key = ?', (product_key,))
+            row = cursor.fetchone()
+            
+            if row:
+                # Оновлюємо тільки якщо є реальні зміни
+                if row[1] != url or row[2] != name or row[3] != capacity_ah:
+                    cursor.execute('''
+                        UPDATE products 
+                        SET url = ?, name = ?, capacity_ah = ?
+                        WHERE product_key = ?
+                    ''', (url, name, capacity_ah, product_key))
+            else:
+                # Вставляємо новий
+                cursor.execute('''
+                    INSERT INTO products (product_key, url, name, capacity_ah)
+                    VALUES (?, ?, ?, ?)
+                ''', (product_key, url, name, capacity_ah))
         self.conn.commit()
 
     def get_product_id(self, product_key: str) -> Optional[int]:
@@ -92,7 +101,7 @@ class HistoryDB:
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def record_changes_bulk(self, products: List[Dict]):
+    def record_changes_bulk(self, products: List[Dict], timestamp: str = None):
         """Масовий запис змін залишків та цін.
         Отримує всі останні стани одним запитом і порівнює в пам'яті.
         """
@@ -142,7 +151,7 @@ class HistoryDB:
         last_prices = {row[0]: row[1] for row in cursor.fetchall()}
 
         # 4. Формуємо списки для масового запису
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now = timestamp if timestamp else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         new_stocks = []
         new_prices = []
 

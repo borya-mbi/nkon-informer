@@ -74,3 +74,6 @@ manage_issue.py
 .agent/workflows/
 nkon_history.db
 html_output/
+extract_history_from_html.py
+nkon_history.zip
+assets/messages.html
