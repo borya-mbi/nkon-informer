@@ -203,6 +203,7 @@ python verify_env.py --beautify
 - `FETCH_REAL_STOCK`: Чи перевіряти реальну кількість на складі (default: `true`).
 - `DETAIL_FETCH_DELAY`: Затримка між запитами (seconds) (default: 2).
 - `RESTOCK_THRESHOLD`: Кількість для детектування "restock" (default: 100).
+- `GENERATE_GRAPHS`: Чи формувати/вивантажувати графіки історії (default: true).
 
 > [!TIP]
 > **Chat ID для груп:** Групові чати мають від'ємний ID, що починається з `-100` (наприклад, `-100123456789`).

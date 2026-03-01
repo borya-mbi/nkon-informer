@@ -40,8 +40,8 @@ def extract_capacity(text: str) -> int:
     if not text:
         return None
         
-    # Пошук чисел перед Ah, Ah, AH, aH
-    match = re.search(r'(\d{3,})\s*(?:Ah|ah|AH|aH)', text)
+        # Пошук чисел перед Ah або Аг (кирилиця)
+    match = re.search(r'(\d{3,})\s*(?:Ah|ah|AH|aH|Аг|аг|АГ|аГ)', text)
     if match:
         try:
             return int(match.group(1))
@@ -81,7 +81,7 @@ def shorten_name(text: str) -> str:
     # 2. Видаляємо технічні характеристики (бо вони зрозумілі з контексту)
     remove_words = [
         r'LiFePO4', r'3\.2V', r'Prismatic', r'Rechargeable', 
-        r'Battery', r'Cell', r'\d+\s*Ah',  # Ємність вже є на початку
+        r'Battery', r'Cell', r'\d+\s*(?:Ah|ah|AH|aH|Аг|аг|АГ|аГ)',  # Ємність вже є на початку
         r'Призматичний'  # Українська "Prismatic"
     ]
     

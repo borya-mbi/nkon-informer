@@ -1,6 +1,7 @@
 import re
 import sys
 from nkon_monitor import NkonMonitor
+from utils import extract_capacity, clean_price
 
 # Mock monitor to test methods without initializing Selenium or Config
 class MockMonitor(NkonMonitor):
@@ -40,7 +41,7 @@ def run_tests():
     ]
     
     for test in test_cases:
-        res = monitor.extract_capacity(test)
+        res = extract_capacity(test)
         status = "✅" if res else "❌"
         print(f'{status} "{test}" -> {res}')
 
@@ -57,7 +58,7 @@ def run_tests():
     ]
     
     for p in prices:
-        res = monitor.clean_price(p)
+        res = clean_price(p)
         status = "✅" if res is not None else "❌"
         print(f'{status} "{p}" -> {res}')
 
