@@ -31,6 +31,7 @@ FTP_USER = os.getenv('FTP_USER', '')
 FTP_PASS = os.getenv('FTP_PASS', '')
 FTP_DIR = os.getenv('FTP_DIR', '/')
 VISUALIZATION_BASE_URL = os.getenv('VISUALIZATION_BASE_URL', '')
+GENERATE_GRAPHS = os.getenv('GENERATE_GRAPHS', 'true').lower() == 'true'
 
 # --- Recipients Configuration ---
 raw_config = os.getenv('TELEGRAM_CONFIG_JSON', '[]')

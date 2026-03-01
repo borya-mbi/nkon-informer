@@ -94,6 +94,7 @@ $small_threshold = Read-UserVariable -Name "SMALL_RESTOCK_THRESHOLD" -PromptText
 $fetch_delay = Read-UserVariable -Name "DETAIL_FETCH_DELAY" -PromptText "Delay between detail requests (seconds)" -DefaultValue "2"
 $quiet_start = Read-UserVariable -Name "QUIET_HOURS_START" -PromptText "Quiet hours START (hour 0-23)" -DefaultValue "21"
 $quiet_end = Read-UserVariable -Name "QUIET_HOURS_END" -PromptText "Quiet hours END (hour 0-23)" -DefaultValue "8"
+$generate_graphs = Read-UserVariable -Name "GENERATE_GRAPHS" -PromptText "Generate History Graphs? (true/false)" -DefaultValue "true"
 
 Write-Host "`nStep 3: Granular Recipients Wizard" -ForegroundColor Yellow
 $current_json = Get-CurrentFromEnv -Key "TELEGRAM_CONFIG_JSON"
@@ -182,6 +183,7 @@ if ($storageChoice -eq "1") {
     [System.Environment]::SetEnvironmentVariable('DETAIL_FETCH_DELAY', $fetch_delay, 'User')
     [System.Environment]::SetEnvironmentVariable('QUIET_HOURS_START', $quiet_start, 'User')
     [System.Environment]::SetEnvironmentVariable('QUIET_HOURS_END', $quiet_end, 'User')
+    [System.Environment]::SetEnvironmentVariable('GENERATE_GRAPHS', $generate_graphs, 'User')
 
     Write-Host "`n[SUCCESS] Settings saved to Windows Registry!" -ForegroundColor Green
     Write-Host "IMPORTANT: Restart VS Code or terminal to apply." -ForegroundColor Yellow
@@ -206,6 +208,7 @@ QUIET_HOURS_END=$quiet_end
 FETCH_DELIVERY_DATES=$fetch_dates
 FETCH_REAL_STOCK=$fetch_stock
 DETAIL_FETCH_DELAY=$fetch_delay
+GENERATE_GRAPHS=$generate_graphs
 
 # Monitor URL
 NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html
@@ -225,3 +228,4 @@ $env:SMALL_RESTOCK_THRESHOLD = $small_threshold
 $env:DETAIL_FETCH_DELAY = $fetch_delay
 $env:QUIET_HOURS_START = $quiet_start
 $env:QUIET_HOURS_END = $quiet_end
+$env:GENERATE_GRAPHS = $generate_graphs

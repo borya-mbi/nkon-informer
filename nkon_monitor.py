@@ -813,7 +813,7 @@ class NkonMonitor:
         }
     
 
-    def run(self, dry_run: bool = False, force_notify: bool = False, no_db: bool = False, no_fetch: bool = False):
+    def run(self, dry_run: bool = False, force_notify: bool = False, no_db: bool = False, no_fetch: bool = False, no_graphs: bool = False):
         """
         Основний цикл моніторингу
         
@@ -1091,7 +1091,7 @@ class NkonMonitor:
                 self._save_history_to_db(products)
                 
                 # Генерація та завантаження графіків історії
-                if HistoryVisualizer and settings.FTP_HOST and settings.VISUALIZATION_BASE_URL:
+                if not no_graphs and settings.GENERATE_GRAPHS and HistoryVisualizer and settings.FTP_HOST and settings.VISUALIZATION_BASE_URL:
                     try:
                         logger.info("Генерація та вивантаження графіків історії...")
                         visualizer = HistoryVisualizer()
@@ -1142,11 +1142,13 @@ def main():
                         help='Не записувати дані в базу даних історії (nkon_history.db)')
     parser.add_argument('--no-fetch', action='store_true',
                         help='Запуск без фактичного парсингу веб-сторінки (використовується останній стан зі state.json)')
+    parser.add_argument('--no-graphs', action='store_true',
+                        help='Не генерувати графіки історії')
     
     args = parser.parse_args()
     
     monitor = NkonMonitor()
-    monitor.run(dry_run=args.dry_run, force_notify=args.force_notify, no_db=args.no_db, no_fetch=args.no_fetch)
+    monitor.run(dry_run=args.dry_run, force_notify=args.force_notify, no_db=args.no_db, no_fetch=args.no_fetch, no_graphs=args.no_graphs)
 
 
 if __name__ == '__main__':

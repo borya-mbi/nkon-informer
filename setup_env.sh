@@ -114,6 +114,7 @@ fetch_delay=$(ask_variable "DETAIL_FETCH_DELAY" "Delay between detail requests (
 quiet_start=$(ask_variable "QUIET_HOURS_START" "Quiet hours START (hour 0-23)" "false" "21")
 quiet_end=$(ask_variable "QUIET_HOURS_END" "Quiet hours END (hour 0-23)" "false" "8")
 heartbeat=$(ask_variable "HEARTBEAT_TIMES" "Heartbeat times (e.g. 8:00,12:00)" "false" "8:00")
+generate_graphs=$(ask_variable "GENERATE_GRAPHS" "Generate History Graphs? (true/false)" "false" "true")
 
 # Step 3: Granular Recipients Wizard
 echo -e "\n${YELLOW}Step 3: Granular Recipients Wizard${NC}" >&2
@@ -219,6 +220,7 @@ FETCH_DELIVERY_DATES=$fetch_dates
 FETCH_REAL_STOCK=$fetch_stock
 DETAIL_FETCH_DELAY=$fetch_delay
 HEARTBEAT_TIMES=$heartbeat
+GENERATE_GRAPHS=$generate_graphs
 
 # Monitor URL
 NKON_URL=https://www.nkon.nl/ua/rechargeable/lifepo4/prismatisch.html"
