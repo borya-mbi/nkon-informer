@@ -3,8 +3,12 @@ import json
 import logging
 import os
 import hashlib
-import settings
+import time
 from datetime import datetime
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import settings
 from db_manager import HistoryDB
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -284,14 +288,52 @@ class HistoryVisualizer:
         self.output_dir = "html_output"
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def extract_data(self):
-        """Витягує всі дані з бази та форматує для Chart.js"""
+    def _inject_statcounter(self, html_content: str) -> str:
+        """
+        Вбудовує код Statcounter в HTML.
+        Якщо налаштування (STATCOUNTER_PROJECT та STATCOUNTER_SECURITY) не задані,
+        повертає оригінальний HTML.
+        Для уникнення поломок з різними версіями HTML_TEMPLATE (напр. з GitHub)
+        код просто вставляється перед тегом </body>.
+        """
+        if not settings.STATCOUNTER_PROJECT or not settings.STATCOUNTER_SECURITY:
+            return html_content
+
+        statcounter_snippet = f"""
+<!-- Default Statcounter code for NKON Informer Graphs -->
+<script type="text/javascript">
+var sc_project={settings.STATCOUNTER_PROJECT}; 
+var sc_invisible=1; 
+var sc_security="{settings.STATCOUNTER_SECURITY}"; 
+</script>
+<script type="text/javascript"
+src="https://www.statcounter.com/counter/counter.js" async></script>
+<noscript><div class="statcounter"><a title="Web Analytics"
+href="https://statcounter.com/" target="_blank"><img class="statcounter"
+src="https://c.statcounter.com/{settings.STATCOUNTER_PROJECT}/0/{settings.STATCOUNTER_SECURITY}/1/"
+alt="Web Analytics" referrerPolicy="no-referrer-when-downgrade"></a></div></noscript>
+<!-- End of Statcounter Code -->
+</body>"""
+
+        # Замінюємо закриваючий тег </body> на наш сніпет + </body>
+        # Використовуємо .replace() з обмеженням в 1 заміну для безпеки
+        if "</body>" in html_content:
+            return html_content.replace("</body>", statcounter_snippet, 1)
+        return html_content
+
+    def extract_data(self, product_ids=None):
+        """Витягує дані з бази та форматує для Chart.js. Якщо product_ids задано, бере тільки їх."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Get all products
-        cursor.execute("SELECT id, product_key, name, url FROM products")
+        # Get products
+        if product_ids:
+            placeholders = ','.join(['?'] * len(product_ids))
+            cursor.execute(f"SELECT id, product_key, name, url FROM products WHERE id IN ({placeholders})", product_ids)
+        else:
+            cursor.execute("SELECT id, product_key, name, url FROM products")
+        
         products = cursor.fetchall()
 
         results = {}
@@ -341,9 +383,9 @@ class HistoryVisualizer:
         conn.close()
         return results
 
-    def generate_htmls(self):
-        """Генерує локальні HTML файли"""
-        data = self.extract_data()
+    def generate_htmls(self, product_ids=None):
+        """Генерує локальні HTML файли. Якщо product_ids задано, бере тільки їх."""
+        data = self.extract_data(product_ids=product_ids)
         generated_files = []
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
@@ -366,6 +408,10 @@ class HistoryVisualizer:
                 "{__DATA__}", json_data
             )
 
+            # --- Ін'єкція аналітики ---
+            # Виконується динамічно, щоб не залежати від жорсткого HTML_TEMPLATE
+            html_content = self._inject_statcounter(html_content)
+
             graph_id = p_data['graph_id']
             file_path = os.path.join(self.output_dir, f"graph_{graph_id}.html")
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -374,6 +420,47 @@ class HistoryVisualizer:
             generated_files.append((file_path, f"graph_{graph_id}.html"))
             
         return generated_files
+
+    def capture_screenshots(self, driver, files):
+        """
+        Captures screenshots of generated HTML files using the provided Selenium driver.
+        Returns a list of paths to the generated PNG files.
+        """
+        png_files = []
+        if not files:
+            return png_files
+
+        logger.info(f"Зняття скріншотів для {len(files)} графіків...")
+        
+        try:
+            for html_path, _ in files:
+                abs_html_path = os.path.abspath(html_path)
+                file_url = f"file:///{abs_html_path.replace('\\', '/')}"
+                
+                logger.info(f"Loading {file_url}...")
+                driver.get(file_url)
+                
+                # Wait for Chart.js animations to finish (approx 1-2s)
+                time.sleep(2)
+                
+                # Try to find the container
+                try:
+                    container = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "container"))
+                    )
+                    
+                    png_path = html_path.replace(".html", ".png")
+                    container.screenshot(png_path)
+                    
+                    png_files.append(png_path)
+                    logger.info(f"✅ Screenshot saved: {png_path}")
+                except Exception as e:
+                    logger.error(f"Error capturing screenshot for {html_path}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Critical error in capture_screenshots: {e}")
+            
+        return png_files
 
     def upload_to_sftp(self, files):
         """Завантажує згенеровані файли на SFTP сервер"""
@@ -407,7 +494,8 @@ class HistoryVisualizer:
             # Очищення локальних тимчасових файлів після успішного завантаження
             for local_path, _ in files:
                 try:
-                    os.remove(local_path)
+                    if local_path.endswith('.html'):
+                        os.remove(local_path)
                 except Exception as e:
                     logger.warning(f"Не вдалося видалити тимчасовий файл {local_path}: {e}")
             logger.info("🧹 Локальні тимчасові файли очищено.")
@@ -416,7 +504,16 @@ class HistoryVisualizer:
             logger.error(f"❌ Помилка SFTP: {e}")
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Генератор графіків історії для NKON Monitor")
+    parser.add_argument("--local-only", action="store_true", help="Згенерувати HTML тільки локально, без завантаження на FTP")
+    args = parser.parse_args()
+
     visualizer = HistoryVisualizer()
     files = visualizer.generate_htmls()
     logger.info(f"Згенеровано {len(files)} HTML файлів.")
-    visualizer.upload_to_sftp(files)
+    
+    if args.local_only:
+        logger.info("Режим --local-only: Файли залишені в директорії html_output/. Вивантаження на FTP пропущено.")
+    else:
+        visualizer.upload_to_sftp(files)

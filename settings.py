@@ -6,7 +6,8 @@ from typing import List, Dict, Any
 # Force reload of .env to ensure fresh data
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    load_dotenv(dotenv_path=env_path, override=True)
 except ImportError:
     pass
 
@@ -32,6 +33,11 @@ FTP_PASS = os.getenv('FTP_PASS', '')
 FTP_DIR = os.getenv('FTP_DIR', '/')
 VISUALIZATION_BASE_URL = os.getenv('VISUALIZATION_BASE_URL', '')
 GENERATE_GRAPHS = os.getenv('GENERATE_GRAPHS', 'true').lower() == 'true'
+TELEGRAPH_ACCESS_TOKEN = os.getenv('TELEGRAPH_ACCESS_TOKEN', '')
+
+# --- Statcounter Analytics ---
+STATCOUNTER_PROJECT = os.getenv('STATCOUNTER_PROJECT', '')
+STATCOUNTER_SECURITY = os.getenv('STATCOUNTER_SECURITY', '')
 
 # --- Recipients Configuration ---
 raw_config = os.getenv('TELEGRAM_CONFIG_JSON', '[]')
