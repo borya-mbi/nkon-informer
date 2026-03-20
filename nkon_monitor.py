@@ -37,6 +37,17 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
+import zipfile
+
+try:
+    import undetected_chromedriver as uc
+except ImportError as e:
+    print(f"CRITICAL ERROR: undetected-chromedriver is not installed or cannot be imported: {e}")
+    print("Please run: venv\\Scripts\\pip.exe install undetected-chromedriver")
+    sys.exit(1)
+except Exception as e:
+    print(f"CRITICAL ERROR during undetected-chromedriver import: {e}")
+    sys.exit(1)
 
 # Налаштування логування
 handler = RotatingFileHandler(
@@ -100,6 +111,19 @@ class NkonMonitor:
             self.quietly_removed = {}
             
         self.session = requests.Session()
+        
+        # Налаштування проксі для requests
+        if settings.PROXY_HOST and settings.PROXY_PORT:
+            proxy_url = f"http://{settings.PROXY_HOST}:{settings.PROXY_PORT}"
+            if settings.PROXY_USER and settings.PROXY_PASS:
+                proxy_url = f"http://{settings.PROXY_USER}:{settings.PROXY_PASS}@{settings.PROXY_HOST}:{settings.PROXY_PORT}"
+            
+            self.session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url
+            }
+            logger.info(f"🌐 Проксі для requests налаштовано: {settings.PROXY_HOST}:{settings.PROXY_PORT}")
+
         self.telegram = TelegramNotifier(self.config, self.session)
         
 
@@ -203,18 +227,112 @@ class NkonMonitor:
             
         self.stock_cumulative_diffs[msg_key] = rec_all_diffs
 
+    def _create_proxy_auth_extension(self, proxy_host, proxy_port, proxy_user, proxy_pass, plugin_path):
+        """Створення розширення для авторизації на проксі в Chrome"""
+        manifest_json = """
+        {
+            "version": "1.0.0",
+            "manifest_version": 2,
+            "name": "Chrome Proxy",
+            "permissions": [
+                "proxy",
+                "tabs",
+                "unlimitedStorage",
+                "storage",
+                "<all_urls>",
+                "webRequest",
+                "webRequestBlocking"
+            ],
+            "background": {
+                "scripts": ["background.js"]
+            },
+            "minimum_chrome_version":"22.0.0"
+        }
+        """
+
+        background_js = """
+        var config = {
+                mode: "fixed_servers",
+                rules: {
+                  singleProxy: {
+                    scheme: "http",
+                    host: "%s",
+                    port: parseInt(%s)
+                  },
+                  bypassList: ["localhost"]
+                }
+              };
+
+        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+
+        function callbackFn(details) {
+            return {
+                authCredentials: {
+                    username: "%s",
+                    password: "%s"
+                }
+            };
+        }
+
+        chrome.webRequest.onAuthRequired.addListener(
+                    callbackFn,
+                    {urls: ["<all_urls>"]},
+                    ['blocking']
+        );
+        """ % (proxy_host, proxy_port, proxy_user, proxy_pass)
+
+        with zipfile.ZipFile(plugin_path, 'w') as zp:
+            zp.writestr("manifest.json", manifest_json)
+            zp.writestr("background.js", background_js)
+
     def _init_driver(self):
-        """Ініціалізація Selenium Driver"""
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        """Ініціалізація Selenium Driver (з підтримкою UC та проксі)"""
+        proxy_host = settings.PROXY_HOST
+        proxy_port = settings.PROXY_PORT
+        proxy_user = settings.PROXY_USER
+        proxy_pass = settings.PROXY_PASS
+
+        use_uc = uc is not None
         
-        service = Service(ChromeDriverManager().install())
-        return webdriver.Chrome(service=service, options=chrome_options)
+        if use_uc:
+            logger.info("🚀 Використання undetected-chromedriver")
+            options = uc.ChromeOptions()
+        else:
+            logger.info("ℹ️ Використання стандартного selenium.webdriver (UC не знайдений)")
+            options = Options()
+
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        # Налаштування проксі для Chrome
+        if proxy_host and proxy_port:
+            if proxy_user and proxy_pass:
+                plugin_path = os.path.join(os.getcwd(), 'proxy_auth_plugin.zip')
+                self._create_proxy_auth_extension(proxy_host, proxy_port, proxy_user, proxy_pass, plugin_path)
+                options.add_extension(plugin_path)
+                logger.info(f"🌐 Проксі з авторизацією налаштовано (Extension): {proxy_host}:{proxy_port}")
+            else:
+                options.add_argument(f'--proxy-server={proxy_host}:{proxy_port}')
+                logger.info(f"🌐 Проксі без авторизації налаштовано: {proxy_host}:{proxy_port}")
+
+        if use_uc:
+            try:
+                # В UC headless режим іноді потребує спеціального прапорця
+                # options.add_argument('--headless=new') 
+                return uc.Chrome(options=options)
+            except Exception as e:
+                logger.error(f"❌ Помилка ініціалізації UC: {e}")
+                # Тепер ми забороняємо виконання без UC за наказом користувача
+                logger.critical("🚫 Виконання без undetected-chromedriver ЗАБОРОНЕНО. Вихід...")
+                sys.exit(1)
+        
+        # Якщо ми тут, значить use_uc було False (хоча при обов'язковому імпорті це малоймовірно)
+        logger.critical("🚫 undetected-chromedriver не знайдений. Вихід...")
+        sys.exit(1)
 
     def fetch_page_with_selenium(self, url: str, driver=None) -> str:
         """
@@ -1127,8 +1245,15 @@ class NkonMonitor:
             raise
         finally:
             if driver:
-                logger.info("Закриття Selenium драйвера...")
-                driver.quit()
+                try:
+                    logger.info("Закриття Selenium драйвера...")
+                    driver.quit()
+                except Exception as e:
+                    # Ignore harmless WinError 6 on Windows
+                    if "WinError 6" not in str(e):
+                        logger.warning(f"Note during driver close: {e}")
+                finally:
+                    driver = None
 
 
 def main():

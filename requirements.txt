@@ -4,3 +4,5 @@ selenium>=4.16.0
 webdriver-manager>=4.0.1
 python-dotenv>=1.0.0
 paramiko>=3.0.0  # Optional: for SFTP chart upload
+undetected-chromedriver>=3.5.5
+setuptools

@@ -21,6 +21,10 @@ FETCH_REAL_STOCK = os.getenv('FETCH_REAL_STOCK', 'true').lower() == 'true'
 RESTOCK_THRESHOLD = int(os.getenv('RESTOCK_THRESHOLD', 100))
 SMALL_RESTOCK_THRESHOLD = int(os.getenv('SMALL_RESTOCK_THRESHOLD', 16))
 DETAIL_FETCH_DELAY = float(os.getenv('DETAIL_FETCH_DELAY', 2.0))
+PROXY_HOST = os.getenv('PROXY_HOST', '')
+PROXY_PORT = os.getenv('PROXY_PORT', '')
+PROXY_USER = os.getenv('PROXY_USER', '')
+PROXY_PASS = os.getenv('PROXY_PASS', '')
 
 # --- Quiet Mode (Global Defaults) ---
 QUIET_HOURS_START = int(os.getenv('QUIET_HOURS_START', 21))
