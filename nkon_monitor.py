@@ -321,13 +321,17 @@ class NkonMonitor:
 
         if use_uc:
             try:
-                # Використовуємо ChromeDriverManager для автовизначення правильної версії драйвера
-                driver_path = ChromeDriverManager().install()
-                logger.info(f"Отримано драйвер для поточної версії Chrome: {driver_path}")
-                return uc.Chrome(options=options, driver_executable_path=driver_path)
+                # Перша спроба: стандартна ініціалізація (краща для Windows)
+                try:
+                    return uc.Chrome(options=options)
+                except Exception as e:
+                    logger.info(f"Стандартний UC не зміг запуститись ({e}), спробуємо через webdriver-manager...")
+                    # Друга спроба: з автозавантаженням конкретного драйвера (важливо для Linux)
+                    driver_path = ChromeDriverManager().install()
+                    logger.info(f"Використовуємо драйвер: {driver_path}")
+                    return uc.Chrome(options=options, driver_executable_path=driver_path)
             except Exception as e:
                 logger.error(f"❌ Помилка ініціалізації UC: {e}")
-                # Тепер ми забороняємо виконання без UC за наказом користувача
                 logger.critical("🚫 Виконання без undetected-chromedriver ЗАБОРОНЕНО. Вихід...")
                 sys.exit(1)
         
@@ -374,9 +378,11 @@ class NkonMonitor:
         """
         logger.info(f"Отримання дати доставки із {url}")
         
-        delay = self.config.get('detail_fetch_delay', 2.0)
-        # logger.info(f"Затримка перед запитом до товару: {delay} сек...")
-        time.sleep(delay)
+        # Рандомізована затримка 2с +- кілька десятих (людська поведінка)
+        base_delay = self.config.get('detail_fetch_delay', 2.0)
+        actual_delay = random.uniform(base_delay - 0.2, base_delay + 0.5)
+        # logger.info(f"Затримка перед запитом: {actual_delay:.2f} сек...")
+        time.sleep(actual_delay)
         
         try:
             driver.get(url)
