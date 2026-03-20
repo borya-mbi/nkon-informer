@@ -292,41 +292,53 @@ class NkonMonitor:
         proxy_user = settings.PROXY_USER
         proxy_pass = settings.PROXY_PASS
 
+    def _init_driver(self):
+        """
+        Ініціалізація Selenium драйвера.
+        """
+        proxy_host = settings.PROXY_HOST
+        proxy_port = settings.PROXY_PORT
+        proxy_user = settings.PROXY_USER
+        proxy_pass = settings.PROXY_PASS
+
         use_uc = uc is not None
         
-        if use_uc:
-            logger.info("🚀 Використання undetected-chromedriver")
-            options = uc.ChromeOptions()
-        else:
-            logger.info("ℹ️ Використання стандартного selenium.webdriver (UC не знайдений)")
-            options = Options()
-
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # Налаштування проксі для Chrome
-        if proxy_host and proxy_port:
-            if proxy_user and proxy_pass:
-                plugin_path = os.path.join(os.getcwd(), 'proxy_auth_plugin.zip')
-                self._create_proxy_auth_extension(proxy_host, proxy_port, proxy_user, proxy_pass, plugin_path)
-                options.add_extension(plugin_path)
-                logger.info(f"🌐 Проксі з авторизацією налаштовано (Extension): {proxy_host}:{proxy_port}")
+        def setup_options():
+            if use_uc:
+                options = uc.ChromeOptions()
             else:
-                options.add_argument(f'--proxy-server={proxy_host}:{proxy_port}')
-                logger.info(f"🌐 Проксі без авторизації налаштовано: {proxy_host}:{proxy_port}")
+                options = Options()
+
+            options.add_argument('--headless')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            
+            # Налаштування проксі для Chrome
+            if proxy_host and proxy_port:
+                if proxy_user and proxy_pass:
+                    plugin_path = os.path.join(os.getcwd(), 'proxy_auth_plugin.zip')
+                    self._create_proxy_auth_extension(proxy_host, proxy_port, proxy_user, proxy_pass, plugin_path)
+                    options.add_extension(plugin_path)
+                    logger.info(f"🌐 Проксі з авторизацією налаштовано (Extension): {proxy_host}:{proxy_port}")
+                else:
+                    options.add_argument(f'--proxy-server={proxy_host}:{proxy_port}')
+                    logger.info(f"🌐 Проксі без авторизації налаштовано: {proxy_host}:{proxy_port}")
+            return options
 
         if use_uc:
             try:
                 # Перша спроба: стандартна ініціалізація (краща для Windows)
                 try:
+                    options = setup_options()
                     return uc.Chrome(options=options)
                 except Exception as e:
                     logger.info(f"Стандартний UC не зміг запуститись ({e}), спробуємо через webdriver-manager...")
                     # Друга спроба: з автозавантаженням конкретного драйвера (важливо для Linux)
+                    # Створюємо НОВИЙ об'єкт опцій, бо старий не можна перевикористовувати
+                    options = setup_options()
                     driver_path = ChromeDriverManager().install()
                     logger.info(f"Використовуємо драйвер: {driver_path}")
                     return uc.Chrome(options=options, driver_executable_path=driver_path)
