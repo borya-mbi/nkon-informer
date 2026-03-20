@@ -330,18 +330,25 @@ class NkonMonitor:
 
         if use_uc:
             try:
-                # Перша спроба: стандартна ініціалізація (краща для Windows)
-                try:
-                    options = setup_options()
-                    return uc.Chrome(options=options)
-                except Exception as e:
-                    logger.info(f"Стандартний UC не зміг запуститись ({e}), спробуємо через webdriver-manager...")
-                    # Друга спроба: з автозавантаженням конкретного драйвера (важливо для Linux)
-                    # Створюємо НОВИЙ об'єкт опцій, бо старий не можна перевикористовувати
+                # Визначаємо стратегію запуску залежно від ОС
+                is_linux = os.name == 'posix'
+
+                if is_linux:
+                    # На Linux (прод) відразу використовуємо webdriver-manager, щоб уникнути конфліктів версій
+                    logger.info("🐧 Linux detected: використовуємо webdriver-manager для автоматичного підбору ChromeDriver")
                     options = setup_options()
                     driver_path = ChromeDriverManager().install()
-                    logger.info(f"Використовуємо драйвер: {driver_path}")
                     return uc.Chrome(options=options, driver_executable_path=driver_path)
+                else:
+                    # На Windows спочатку пробуємо стандарт (він тут стабільніший)
+                    try:
+                        options = setup_options()
+                        return uc.Chrome(options=options)
+                    except Exception as e:
+                        logger.warning(f"Стандартний запуск UC не вдався ({e}), використовуємо фолбек через webdriver-manager...")
+                        options = setup_options()
+                        driver_path = ChromeDriverManager().install()
+                        return uc.Chrome(options=options, driver_executable_path=driver_path)
             except Exception as e:
                 logger.error(f"❌ Помилка ініціалізації UC: {e}")
                 logger.critical("🚫 Виконання без undetected-chromedriver ЗАБОРОНЕНО. Вихід...")
