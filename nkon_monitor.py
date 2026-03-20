@@ -372,10 +372,10 @@ class NkonMonitor:
         """
         Отримання дати доставки через Selenium (бо requests блокує 403)
         """
-        logger.info(f"Отримання детальної інформації про доставку (Selenium): {url}")
+        logger.info(f"Отримання дати доставки із {url}")
         
         delay = self.config.get('detail_fetch_delay', 2.0)
-        logger.info(f"Затримка перед запитом до товару: {delay} сек...")
+        # logger.info(f"Затримка перед запитом до товару: {delay} сек...")
         time.sleep(delay)
         
         try:
@@ -387,20 +387,22 @@ class NkonMonitor:
                 )
                 time.sleep(0.3)  # Невелика пауза для стабілізації тексту
             except:
-                logger.warning(f"Елемент .ampreorder-observed не з'явився на {url}")
+                pass # Пропускаємо warning, далі напишемо що дату не знайдено
             
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             date_elem = soup.select_one('.ampreorder-observed')
             if date_elem:
                 match = re.search(r'(\d{1,2})-(\d{1,2})-(\d{4})', date_elem.get_text())
                 if match:
-                    # Regex шукає DD-MM-YYYY в тексті (працює і без пробілу: "доставки:27-03-2026")
-                    # Нормалізація дати до DD-MM-YYYY (додавання нулів)
                     d, m, y = match.groups()
-                    return f"{int(d):02d}-{int(m):02d}-{y}"
+                    extracted_date = f"{int(d):02d}-{int(m):02d}-{y}"
+                    logger.info(f"  └── Знайдено дату: {extracted_date}")
+                    return extracted_date
+            
+            logger.info("  └── Дату не знайдено")
             return None
         except Exception as e:
-            logger.warning(f"Не вдалося отримати дату доставки для {url}: {e}")
+            logger.warning(f"  └── Не вдалося отримати дату доставки: {str(e).splitlines()[0]}")
             return None
     
     def _probe_qty(self, driver, qty: int) -> tuple:
