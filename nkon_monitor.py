@@ -321,9 +321,10 @@ class NkonMonitor:
 
         if use_uc:
             try:
-                # В UC headless режим іноді потребує спеціального прапорця
-                # options.add_argument('--headless=new') 
-                return uc.Chrome(options=options)
+                # Використовуємо ChromeDriverManager для автовизначення правильної версії драйвера
+                driver_path = ChromeDriverManager().install()
+                logger.info(f"Отримано драйвер для поточної версії Chrome: {driver_path}")
+                return uc.Chrome(options=options, driver_executable_path=driver_path)
             except Exception as e:
                 logger.error(f"❌ Помилка ініціалізації UC: {e}")
                 # Тепер ми забороняємо виконання без UC за наказом користувача
